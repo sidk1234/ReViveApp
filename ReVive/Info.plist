@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EDGE_BASE_URL</key>
+	<string>https://ihwecxhqragogndktrxb.supabase.co/</string>
+	<key>EDGE_ANON_KEY</key>
+	<string>$(EDGE_ANON_KEY)</string>
+	<key>SHOW_TECH_ERRORS</key>
+	<string>$(SHOW_TECH_ERRORS)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Used to provide local recycling guidance.</string>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>PreciseLocation</key>
+		<string>Precise location improves ZIP lookup and local recycling guidance.</string>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Used to scan items for recycling guidance.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Used to import photos for analysis.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Used to save cutouts to your photo library.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>revive</string>
+				<string>com.googleusercontent.apps.615177800580-75k20j8jk28fp9hvden5oqm7ih9ubjvt</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
