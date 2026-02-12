@@ -160,7 +160,7 @@ struct AccountView: View {
         .sheet(isPresented: $showEditProfile) {
             EditProfileSheet()
                 .environmentObject(auth)
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
         }
     }
 
@@ -183,6 +183,9 @@ private struct EditProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var displayName: String = ""
     @State private var email: String = ""
+    @State private var currentPassword: String = ""
+    @State private var newPassword: String = ""
+    @State private var confirmNewPassword: String = ""
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -190,93 +193,190 @@ private struct EditProfileSheet: View {
             AppTheme.backgroundGradient(.dark)
                 .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Edit profile")
-                        .font(AppType.title(20))
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Button("Done") { dismiss() }
-                        .font(AppType.body(12))
-                        .foregroundStyle(.primary.opacity(0.7))
-                        .buttonStyle(.plain)
-                }
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text("Edit profile")
+                            .font(AppType.title(20))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Button("Done") { dismiss() }
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                            .buttonStyle(.plain)
+                    }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Display name")
-                        .font(AppType.body(12))
-                        .foregroundStyle(.primary.opacity(0.7))
-                    TextField("Your name", text: $displayName)
-                        .textFieldStyle(.plain)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .focused($nameFocused)
-                        .submitLabel(.done)
-                        .onSubmit { nameFocused = false }
-                        .padding(.horizontal, 14)
-                        .frame(height: 46)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                        )
-                }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Display name")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        TextField("Your name", text: $displayName)
+                            .textFieldStyle(.plain)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .focused($nameFocused)
+                            .submitLabel(.done)
+                            .onSubmit { nameFocused = false }
+                            .padding(.horizontal, 14)
+                            .frame(height: 46)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                    }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Email")
-                        .font(AppType.body(12))
-                        .foregroundStyle(.primary.opacity(0.7))
-                    TextField("", text: $email)
-                        .textFieldStyle(.plain)
-                        .disabled(true)
-                        .padding(.horizontal, 14)
-                        .frame(height: 46)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.white.opacity(0.04))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Email")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        TextField("", text: $email)
+                            .textFieldStyle(.plain)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.emailAddress)
+                            .disabled(!auth.canEditEmailPassword)
+                            .padding(.horizontal, 14)
+                            .frame(height: 46)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(auth.canEditEmailPassword ? 0.06 : 0.04))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.white.opacity(auth.canEditEmailPassword ? 0.12 : 0.08), lineWidth: 1)
+                            )
+                    }
 
-                if let message = auth.displayErrorMessage, !message.isEmpty {
-                    Text(message)
-                        .font(AppType.body(12))
-                        .foregroundStyle(.primary.opacity(0.7))
-                }
+                    if auth.canEditEmailPassword {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Current password")
+                                .font(AppType.body(12))
+                                .foregroundStyle(.primary.opacity(0.7))
+                            SecureField("Enter your password", text: $currentPassword)
+                                .textFieldStyle(.plain)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .padding(.horizontal, 14)
+                                .frame(height: 46)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.06))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                )
+                        }
 
-                Button {
-                    Task { @MainActor in
-                        let ok = await auth.updateProfile(displayName: displayName)
-                        if ok {
-                            dismiss()
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("New password")
+                                .font(AppType.body(12))
+                                .foregroundStyle(.primary.opacity(0.7))
+                            SecureField("Leave blank to keep current", text: $newPassword)
+                                .textFieldStyle(.plain)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .padding(.horizontal, 14)
+                                .frame(height: 46)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.06))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                )
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Confirm new password")
+                                .font(AppType.body(12))
+                                .foregroundStyle(.primary.opacity(0.7))
+                            SecureField("Re-enter new password", text: $confirmNewPassword)
+                                .textFieldStyle(.plain)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .padding(.horizontal, 14)
+                                .frame(height: 46)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.06))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                )
                         }
                     }
-                } label: {
-                    HStack {
-                        Spacer()
-                        Text(auth.isLoading ? "Saving..." : "Save changes")
-                            .font(AppType.title(14))
-                        Spacer()
-                    }
-                    .foregroundStyle(.primary)
-                    .padding(.vertical, 12)
-                    .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .disabled(auth.isLoading)
 
-                Spacer()
+                    if let message = auth.displayErrorMessage, !message.isEmpty {
+                        Text(message)
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+
+                    Button {
+                        Task { @MainActor in
+                            auth.errorMessage = nil
+                            let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let emailChanged = auth.canEditEmailPassword && trimmedEmail != (auth.user?.email ?? "")
+                            let wantsPasswordChange = auth.canEditEmailPassword &&
+                                (!newPassword.isEmpty || !confirmNewPassword.isEmpty)
+
+                            if wantsPasswordChange {
+                                guard newPassword == confirmNewPassword else {
+                                    auth.errorMessage = "Passwords do not match."
+                                    return
+                                }
+                                guard newPassword.count >= 6 else {
+                                    auth.errorMessage = "Password must be at least 6 characters."
+                                    return
+                                }
+                            }
+
+                            if (emailChanged || wantsPasswordChange) && currentPassword.isEmpty {
+                                auth.errorMessage = "Enter your current password to continue."
+                                return
+                            }
+
+                            let ok = await auth.updateProfile(
+                                displayName: trimmedName,
+                                email: emailChanged ? trimmedEmail : nil,
+                                newPassword: wantsPasswordChange ? newPassword : nil,
+                                currentPassword: (emailChanged || wantsPasswordChange) ? currentPassword : nil
+                            )
+                            if ok {
+                                dismiss()
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Text(auth.isLoading ? "Saving..." : "Save changes")
+                                .font(AppType.title(14))
+                            Spacer()
+                        }
+                        .foregroundStyle(.primary)
+                        .padding(.vertical, 12)
+                        .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(auth.isLoading)
+
+                }
+                .padding(20)
             }
-            .padding(20)
             .onAppear {
                 displayName = auth.user?.displayName ?? ""
                 email = auth.user?.email ?? ""
+                currentPassword = ""
+                newPassword = ""
+                confirmNewPassword = ""
             }
         }
         .toolbar {

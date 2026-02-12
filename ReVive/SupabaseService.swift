@@ -109,6 +109,7 @@ struct SupabaseUser: Equatable {
     let email: String?
     let displayName: String?
     let preferences: UserPreferences?
+    let authProviders: [String]
 }
 
 struct AppSettings: Decodable {
@@ -458,13 +459,35 @@ final class SupabaseService {
 
         let email = dict["email"] as? String
         let metadata = dict["user_metadata"] as? [String: Any]
+        let appMetadata = dict["app_metadata"] as? [String: Any]
         let displayName =
             metadata?["full_name"] as? String ??
             metadata?["name"] as? String ??
             metadata?["preferred_username"] as? String
         let preferences = UserPreferences.from(metadata: metadata)
+        let authProviders = parseAuthProviders(appMetadata: appMetadata, identities: dict["identities"] as? [[String: Any]])
 
-        return SupabaseUser(id: id, email: email, displayName: displayName, preferences: preferences)
+        return SupabaseUser(
+            id: id,
+            email: email,
+            displayName: displayName,
+            preferences: preferences,
+            authProviders: authProviders
+        )
+    }
+
+    private func parseAuthProviders(appMetadata: [String: Any]?, identities: [[String: Any]]?) -> [String] {
+        var providers = Set<String>()
+        if let provider = appMetadata?["provider"] as? String {
+            providers.insert(provider.lowercased())
+        }
+        if let list = appMetadata?["providers"] as? [String] {
+            list.forEach { providers.insert($0.lowercased()) }
+        }
+        if let identities {
+            identities.compactMap { $0["provider"] as? String }.forEach { providers.insert($0.lowercased()) }
+        }
+        return Array(providers)
     }
 
     func updateUserPreferences(_ preferences: UserPreferences, accessToken: String) async throws {
@@ -487,6 +510,32 @@ final class SupabaseService {
         request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         let payload: [String: Any] = ["data": metadata]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw ServiceError.httpError(http.statusCode, msg)
+        }
+    }
+
+    func updateAuthUser(email: String?, password: String?, accessToken: String) async throws {
+        var payload: [String: Any] = [:]
+        if let email, !email.isEmpty {
+            payload["email"] = email
+        }
+        if let password, !password.isEmpty {
+            payload["password"] = password
+        }
+        guard !payload.isEmpty else { return }
+
+        let url = config.url.appendingPathComponent("auth/v1/user")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
 
         let (data, response) = try await URLSession.shared.data(for: request)

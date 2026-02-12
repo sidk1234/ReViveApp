@@ -5,6 +5,7 @@
 
 import SwiftUI
 import UIKit
+import GoogleSignIn
 
 private enum AuthField: Hashable {
     case email
@@ -48,17 +49,16 @@ struct LoginScreen: View {
     }
 
     private var authCard: some View {
-        TabView(selection: $mode) {
-            signInCard
-                .tag(AuthMode.signIn)
-                .tabItem { Text("Sign in") }
-                .modifier(HideTabBarModifier())
-
-            createCard
-                .tag(AuthMode.create)
-                .tabItem { Text("Create") }
-                .modifier(HideTabBarModifier())
+        ZStack {
+            if mode == .signIn {
+                signInCard
+                    .transition(.opacity)
+            } else {
+                createCard
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.18), value: mode)
     }
 
     private var signInCard: some View {
@@ -156,9 +156,7 @@ struct LoginScreen: View {
                 onApple: auth.signInWithApple
             )
 
-            Text("By continuing, you agree to keep your credentials private. Supabase stores passwords as secure hashes.")
-                .font(AppType.body(11))
-                .foregroundStyle(.primary.opacity(0.6))
+            AuthLegalRow()
                 .padding(.top, 4)
         }
         .padding(22)
@@ -258,9 +256,7 @@ struct LoginScreen: View {
                 onApple: auth.signInWithApple
             )
 
-            Text("By continuing, you agree to keep your credentials private. Supabase stores passwords as secure hashes.")
-                .font(AppType.body(11))
-                .foregroundStyle(.primary.opacity(0.6))
+            AuthLegalRow()
                 .padding(.top, 4)
         }
         .padding(22)
@@ -335,7 +331,7 @@ private struct AuthShell<Right: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 let isWide = proxy.size.width > 720
                 Group {
                     if isWide {
@@ -355,16 +351,6 @@ private struct AuthShell<Right: View>: View {
                 .padding(.top, 40)
                 .padding(.bottom, 120)
             }
-        }
-    }
-}
-
-private struct HideTabBarModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 16.0, *) {
-            content.toolbar(.hidden, for: .tabBar)
-        } else {
-            content
         }
     }
 }
@@ -500,28 +486,7 @@ private struct AuthSocialButtons: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Button {
-                onGoogle()
-            } label: {
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(Color.white.opacity(0.12))
-                        .frame(width: 28, height: 28)
-                        .overlay(
-                            Text("G")
-                                .font(AppType.title(13))
-                                .foregroundStyle(.primary)
-                        )
-                    Text("Continue with Google")
-                        .font(AppType.title(14))
-                }
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(isLoading)
+            GoogleBrandedSignInButton(isLoading: isLoading, action: onGoogle)
 
             Button {
                 onApple()
@@ -542,6 +507,107 @@ private struct AuthSocialButtons: View {
     }
 }
 
+private struct GoogleBrandedSignInButton: View {
+    let isLoading: Bool
+    let action: () -> Void
+
+    private let fillColor = Color(red: 19 / 255, green: 19 / 255, blue: 20 / 255) // #131314
+    private let strokeColor = Color(red: 142 / 255, green: 145 / 255, blue: 143 / 255) // #8E918F
+    private let textColor = Color(red: 227 / 255, green: 227 / 255, blue: 227 / 255) // #E3E3E3
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                GoogleLogoBadge()
+                Text("Sign in with Google")
+                    .font(googleButtonFont)
+                    .foregroundStyle(textColor)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 16)
+            .frame(height: 48)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(fillColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(strokeColor, lineWidth: 1)
+        )
+        .opacity(isLoading ? 0.6 : 1)
+        .allowsHitTesting(!isLoading)
+    }
+
+    private var googleButtonFont: Font {
+        if UIFont(name: "Roboto-Medium", size: 14) != nil {
+            return .custom("Roboto-Medium", size: 14)
+        }
+        if UIFont(name: "Roboto-Bold", size: 14) != nil {
+            return .custom("Roboto-Bold", size: 14)
+        }
+        return .system(size: 14, weight: .medium)
+    }
+}
+
+private struct GoogleLogoBadge: View {
+    private let logoSize: CGFloat = 18
+
+    var body: some View {
+        if let image = GoogleBrandAssets.logo {
+            Image(uiImage: image)
+                .resizable()
+                .renderingMode(.original)
+                .frame(width: logoSize, height: logoSize)
+        } else {
+            Text("G")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Color(red: 66 / 255, green: 133 / 255, blue: 244 / 255))
+        }
+    }
+}
+
+private enum GoogleBrandAssets {
+    static let logo: UIImage? = {
+        let candidates = googleResourceBundleCandidates()
+        for bundle in candidates {
+            if let image = UIImage(named: "google", in: bundle, compatibleWith: nil) {
+                return image
+            }
+            if let path = bundle.path(forResource: "google", ofType: "png"),
+               let image = UIImage(contentsOfFile: path) {
+                return image
+            }
+        }
+        if let image = UIImage(named: "google") {
+            return image
+        }
+        return nil
+    }()
+
+    private static func googleResourceBundleCandidates() -> [Bundle] {
+        var bundles: [Bundle] = []
+        let bundleNames = ["GoogleSignIn_GoogleSignIn", "GoogleSignIn"]
+        for name in bundleNames {
+            if let path = Bundle.main.path(forResource: name, ofType: "bundle"),
+               let bundle = Bundle(path: path) {
+                bundles.append(bundle)
+            }
+        }
+        let frameworkBundle = Bundle(for: GIDSignInButton.self)
+        for name in bundleNames {
+            if let path = frameworkBundle.path(forResource: name, ofType: "bundle"),
+               let bundle = Bundle(path: path) {
+                bundles.append(bundle)
+            }
+        }
+        bundles.append(frameworkBundle)
+        return bundles
+    }
+}
+
 private struct AuthMessageView: View {
     let errorMessage: String?
     let notice: String?
@@ -550,7 +616,7 @@ private struct AuthMessageView: View {
         if let message = errorMessage, !message.isEmpty {
             Text(message)
                 .font(AppType.body(12))
-                .foregroundStyle(Color.red.opacity(0.85))
+                .foregroundStyle(Color.white.opacity(0.9))
         } else if let notice {
             Text(notice)
                 .font(AppType.body(12))
@@ -576,6 +642,32 @@ private struct AuthBulletRow: View {
                 .font(AppType.body(12))
                 .foregroundStyle(.primary.opacity(0.75))
         }
+    }
+}
+
+private struct AuthLegalRow: View {
+    var body: some View {
+        Text(legalText)
+            .font(AppType.body(11))
+            .foregroundStyle(.primary.opacity(0.6))
+    }
+
+    private var legalText: AttributedString {
+        var text = AttributedString("By continuing, you agree to the Terms of Service and Privacy Policy.")
+
+        if let range = text.range(of: "Terms of Service") {
+            text[range].link = URL(string: "https://reviveearth.vercel.app/terms")
+            text[range].foregroundColor = .blue
+            text[range].underlineStyle = .single
+        }
+
+        if let range = text.range(of: "Privacy Policy") {
+            text[range].link = URL(string: "https://reviveearth.vercel.app/policy")
+            text[range].foregroundColor = .blue
+            text[range].underlineStyle = .single
+        }
+
+        return text
     }
 }
 

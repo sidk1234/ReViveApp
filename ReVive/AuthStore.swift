@@ -78,6 +78,13 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     var allowWebSearchEnabled: Bool { preferences.allowWebSearch ?? true }
     var reduceMotionEnabled: Bool { preferences.reduceMotion ?? false }
     var defaultZipCode: String { preferences.defaultZip ?? "" }
+    var canEditEmailPassword: Bool {
+        let providers = user?.authProviders.map { $0.lowercased() } ?? []
+        guard !providers.isEmpty else { return false }
+        let hasEmail = providers.contains("email")
+        let hasSocial = providers.contains("google") || providers.contains("apple")
+        return hasEmail && !hasSocial
+    }
 
     private let sessionKey = "recai.supabase.session"
     private let preferencesKey = "recai.user.preferences"
@@ -276,6 +283,9 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 self.isLoading = false
                 if let error = error {
                     let nsError = error as NSError
+                    if self.isUserCancelledGoogleSignIn(nsError) {
+                        return
+                    }
                     self.errorMessage = "\(nsError.localizedDescription) (\(nsError.domain) \(nsError.code))"
                     return
                 }
@@ -511,7 +521,12 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
     }
 
-    func updateProfile(displayName: String) async -> Bool {
+    func updateProfile(
+        displayName: String,
+        email: String?,
+        newPassword: String?,
+        currentPassword: String?
+    ) async -> Bool {
         guard let supabase else {
             let diag = SupabaseConfig.diagnostics()
             AuthLog.error("updateProfile aborted: Missing Supabase config. \(diag.summary)")
@@ -529,6 +544,42 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             return false
         }
 
+        let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let emailChangeRequested = (trimmedEmail != nil && trimmedEmail != user.email)
+        if emailChangeRequested, let trimmedEmail, trimmedEmail.isEmpty {
+            errorMessage = "Email is required."
+            return false
+        }
+        let passwordChangeRequested = (newPassword != nil && !(newPassword ?? "").isEmpty)
+        let needsReauth = emailChangeRequested || passwordChangeRequested
+
+        if needsReauth {
+            guard canEditEmailPassword else {
+                errorMessage = "Email and password changes are only available for email sign-in accounts."
+                return false
+            }
+            guard let currentEmail = user.email, !currentEmail.isEmpty else {
+                errorMessage = "Email unavailable for this account."
+                return false
+            }
+            guard let currentPassword, !currentPassword.isEmpty else {
+                errorMessage = "Enter your current password to continue."
+                return false
+            }
+
+            do {
+                let reauthSession = try await supabase.signInWithEmail(
+                    email: currentEmail,
+                    password: currentPassword
+                )
+                self.session = reauthSession
+                self.saveSession(reauthSession)
+            } catch {
+                errorMessage = readableAuthError(error, provider: "email")
+                return false
+            }
+        }
+
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -539,18 +590,27 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
 
         do {
+            if needsReauth {
+                try await supabase.updateAuthUser(
+                    email: emailChangeRequested ? trimmedEmail : nil,
+                    password: passwordChangeRequested ? newPassword : nil,
+                    accessToken: accessToken
+                )
+            }
+
             try await supabase.updateProfile(
                 id: user.id,
                 displayName: trimmed,
-                email: user.email ?? "",
+                email: emailChangeRequested ? (trimmedEmail ?? "") : (user.email ?? ""),
                 accessToken: accessToken
             )
             try await supabase.updateUserDisplayName(trimmed, accessToken: accessToken)
             self.user = SupabaseUser(
                 id: user.id,
-                email: user.email,
+                email: emailChangeRequested ? trimmedEmail : user.email,
                 displayName: trimmed,
-                preferences: user.preferences
+                preferences: user.preferences,
+                authProviders: user.authProviders
             )
             return true
         } catch {
@@ -863,6 +923,16 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         error.domain == "com.google.GIDSignIn" && error.code == -4
     }
 
+    private func isUserCancelledGoogleSignIn(_ error: NSError) -> Bool {
+        error.domain == "com.google.GIDSignIn" && error.code == -5
+    }
+
+    private func isUserCancelledAppleSignIn(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == ASAuthorizationError.errorDomain &&
+            nsError.code == ASAuthorizationError.Code.canceled.rawValue
+    }
+
     private func randomNonceString(length: Int = 32) -> String {
         precondition(length > 0)
         let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
@@ -947,6 +1017,9 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
         isLoading = false
         currentNonce = nil
+        if isUserCancelledAppleSignIn(error) {
+            return
+        }
         errorMessage = error.localizedDescription
     }
 
