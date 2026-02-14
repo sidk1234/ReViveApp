@@ -206,6 +206,7 @@ struct CameraScreen: View {
     @State private var isTextEntryActive: Bool = false
     @State private var isTextRequestInFlight: Bool = false
     @State private var isHidingResult: Bool = false
+    @State private var showGuestQuotaLock: Bool = false
     @State private var manualItemText: String = ""
     @FocusState private var manualTextFocused: Bool
     @Namespace private var shutterNamespace
@@ -243,6 +244,11 @@ struct CameraScreen: View {
     
     private var hasOverlay: Bool {
         camera.aiIsLoading || camera.aiParsedResult != nil || camera.aiErrorText != nil
+    }
+
+    private var guestQuotaExhausted: Bool {
+        guard !auth.isSignedIn else { return false }
+        return (auth.guestQuota?.remaining ?? 0) <= 0
     }
 
     private var hasLocationAccess: Bool {
@@ -777,6 +783,10 @@ struct CameraScreen: View {
         let trimmed = manualItemText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !camera.aiIsLoading else { return }
+        if guestQuotaExhausted {
+            showGuestQuotaLock = true
+            return
+        }
         lastAnalysisSource = .text
         isTextRequestInFlight = true
         let (context, useWebSearch) = resolveLocationContext()
@@ -1080,6 +1090,48 @@ struct CameraScreen: View {
         }
     }
 
+    private var guestQuotaOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.6)
+                .ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                Text("Sign in to keep recycling")
+                    .font(AppType.title(20))
+                    .foregroundStyle(.white)
+
+                Text("Guest scans are used up. Please sign in to scan more.")
+                    .font(AppType.body(14))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+
+                Button {
+                    NotificationCenter.default.post(name: .reviveRequestSignIn, object: nil)
+                } label: {
+                    Text("Sign in")
+                        .font(AppType.title(16))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(Color.white))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 22)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color.black.opacity(0.35))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .transition(.opacity)
+        .allowsHitTesting(true)
+    }
+
     var body: some View {
         ZStack {
 
@@ -1233,6 +1285,10 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity)
             }
 
+            if showGuestQuotaLock {
+                guestQuotaOverlay
+            }
+
             // MARK: - Bottom controls
             VStack {
                 Spacer()
@@ -1302,6 +1358,10 @@ struct CameraScreen: View {
                         if !hasOverlay {
                             Button {
                                 guard enabled else { return }
+                                if guestQuotaExhausted {
+                                    showGuestQuotaLock = true
+                                    return
+                                }
                                 let (context, useWebSearch) = resolveLocationContext()
                                 zipFieldFocused = false
                                 manualTextFocused = false
@@ -1333,6 +1393,10 @@ struct CameraScreen: View {
                             .opacity(enabled ? 1.0 : 0.55)
                         } else if camera.aiErrorText != nil {
                             Button {
+                                if guestQuotaExhausted {
+                                    showGuestQuotaLock = true
+                                    return
+                                }
                                 let (context, useWebSearch) = resolveLocationContext()
                                 zipFieldFocused = false
                                 manualTextFocused = false
@@ -1422,6 +1486,23 @@ struct CameraScreen: View {
         .onChange(of: camera.aiErrorText) { _, newValue in
             if newValue != nil {
                 isTextRequestInFlight = false
+            }
+            if let message = newValue?.lowercased() {
+                if message.contains("guest quota exceeded")
+                    || message.contains("quota_exceeded")
+                    || message.contains("guest access unavailable") {
+                    showGuestQuotaLock = true
+                }
+            }
+        }
+        .onChange(of: auth.guestQuota) { _, newValue in
+            if let newValue, !auth.isSignedIn, newValue.remaining <= 0 {
+                showGuestQuotaLock = true
+            }
+        }
+        .onChange(of: auth.isSignedIn) { _, newValue in
+            if newValue {
+                showGuestQuotaLock = false
             }
         }
         .onChange(of: camera.noItemDetected) { _, newValue in

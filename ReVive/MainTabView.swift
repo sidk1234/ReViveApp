@@ -82,6 +82,9 @@ struct MainTabView: View {
                 bannerQuota = quota
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveRequestSignIn)) { _ in
+            selection = .account
+        }
         .onChange(of: auth.guestQuota) { _, newValue in
             if let newValue, !auth.isSignedIn {
                 bannerQuota = newValue

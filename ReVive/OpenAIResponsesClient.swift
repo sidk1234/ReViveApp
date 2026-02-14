@@ -186,6 +186,7 @@ private func notifyGuestQuotaIfNeeded(_ response: HTTPURLResponse) {
 
 extension Notification.Name {
     static let reviveGuestQuotaUpdated = Notification.Name("revive.guestQuotaUpdated")
+    static let reviveRequestSignIn = Notification.Name("revive.requestSignIn")
 }
 
 private func extractText(from data: Data) -> String? {
