@@ -4,12 +4,15 @@
 //
 
 import SwiftUI
+import PhotosUI
+import UIKit
 
 struct AccountView: View {
     @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var history: HistoryStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var showEditProfile = false
+    @State private var showDeleteAlert = false
 
     private var totalScans: Int { history.entries.count }
     private var recyclableCount: Int { history.entries.filter { $0.recyclable }.count }
@@ -41,6 +44,14 @@ struct AccountView: View {
                 } else {
                     LoginScreen()
                 }
+
+                NavigationLink(isActive: $showEditProfile) {
+                    EditProfileView()
+                        .environmentObject(auth)
+                } label: {
+                    EmptyView()
+                }
+                .hidden()
             }
         }
     }
@@ -73,7 +84,7 @@ struct AccountView: View {
                         .foregroundStyle(.primary)
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .glassCard(cornerRadius: 20)
+                        .accountCard()
                     }
                     .buttonStyle(.plain)
                 }
@@ -89,6 +100,8 @@ struct AccountView: View {
                     .foregroundStyle(.primary)
 
                 badgeGrid
+
+                deleteAccountCard
             }
             .padding(.horizontal, 28)
             .padding(.top, 28)
@@ -99,6 +112,37 @@ struct AccountView: View {
     private var accountHeader: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
+                if let image = ProfileExtrasStore.loadProfileImage() {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 54, height: 54)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                } else if let avatarURL = auth.user?.avatarURL, let url = URL(string: avatarURL) {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image {
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            Circle().fill(Color.white.opacity(0.08))
+                        }
+                    }
+                    .frame(width: 54, height: 54)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                } else {
+                    Circle()
+                        .fill(Color.white.opacity(0.08))
+                        .frame(width: 54, height: 54)
+                        .overlay(
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundStyle(.primary.opacity(0.7))
+                        )
+                }
+
                 VStack(alignment: .leading, spacing: 6) {
                     Text(auth.isSignedIn ? "Signed in" : "Guest")
                         .font(AppType.title(16))
@@ -156,12 +200,7 @@ struct AccountView: View {
             }
         }
         .padding(16)
-        .glassCard(cornerRadius: 20)
-        .sheet(isPresented: $showEditProfile) {
-            EditProfileSheet()
-                .environmentObject(auth)
-                .presentationDetents([.medium, .large])
-        }
+        .accountCard()
     }
 
     private var badgeGrid: some View {
@@ -176,9 +215,47 @@ struct AccountView: View {
             }
         }
     }
+
+    private var deleteAccountCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Delete account")
+                .font(AppType.title(16))
+                .foregroundStyle(.primary)
+
+            Text("Delete your account and all associated data from Supabase.")
+                .font(AppType.body(12))
+                .foregroundStyle(.primary.opacity(0.7))
+
+            Button {
+                showDeleteAlert = true
+            } label: {
+                HStack {
+                    Image(systemName: "trash")
+                    Text(auth.isLoading ? "Deleting..." : "Delete account")
+                        .font(AppType.title(14))
+                }
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(auth.isLoading)
+            .alert("Delete account?", isPresented: $showDeleteAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) {
+                    auth.deleteAccount()
+                }
+            } message: {
+                Text("This action permanently deletes your account and cannot be undone.")
+            }
+        }
+        .padding(16)
+        .accountCard()
+    }
 }
 
-private struct EditProfileSheet: View {
+private struct EditProfileView: View {
     @EnvironmentObject private var auth: AuthStore
     @Environment(\.dismiss) private var dismiss
     @State private var displayName: String = ""
@@ -186,7 +263,17 @@ private struct EditProfileSheet: View {
     @State private var currentPassword: String = ""
     @State private var newPassword: String = ""
     @State private var confirmNewPassword: String = ""
+    @State private var phoneNumber: String = ""
+    @State private var location: String = ""
+    @State private var bio: String = ""
+    @State private var website: String = ""
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var photoData: Data?
     @FocusState private var nameFocused: Bool
+    
+    private var profileImage: Image? {
+        ProfileExtrasStore.loadProfileImage(data: photoData)
+    }
 
     var body: some View {
         ZStack {
@@ -195,16 +282,76 @@ private struct EditProfileSheet: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack {
+                    HStack(spacing: 12) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 44, height: 44)
+                                .background(
+                                    Circle().fill(Color.white.opacity(0.08))
+                                )
+                        }
+                        .buttonStyle(.plain)
+
                         Text("Edit profile")
                             .font(AppType.title(20))
                             .foregroundStyle(.primary)
+
                         Spacer()
-                        Button("Done") { dismiss() }
-                            .font(AppType.body(12))
-                            .foregroundStyle(.primary.opacity(0.7))
-                            .buttonStyle(.plain)
                     }
+
+                    HStack(spacing: 16) {
+                        if let profileImage {
+                            profileImage
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 72, height: 72)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                        } else if let avatarURL = auth.user?.avatarURL, let url = URL(string: avatarURL) {
+                            AsyncImage(url: url) { phase in
+                                if let image = phase.image {
+                                    image
+                                        .resizable()
+                                        .scaledToFill()
+                                } else {
+                                    Circle().fill(Color.white.opacity(0.08))
+                                }
+                            }
+                            .frame(width: 72, height: 72)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                        } else {
+                            Circle()
+                                .fill(Color.white.opacity(0.08))
+                                .frame(width: 72, height: 72)
+                                .overlay(
+                                    Image(systemName: "person.fill")
+                                        .font(.system(size: 24, weight: .bold))
+                                        .foregroundStyle(.primary.opacity(0.7))
+                                )
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Profile photo")
+                                .font(AppType.body(12))
+                                .foregroundStyle(.primary.opacity(0.7))
+                            PhotosPicker(
+                                selection: $selectedPhoto,
+                                matching: .images,
+                                photoLibrary: .shared()
+                            ) {
+                                Text("Change photo")
+                                    .font(AppType.body(13))
+                                    .foregroundStyle(AppTheme.mint)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.bottom, 6)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Display name")
@@ -248,6 +395,84 @@ private struct EditProfileSheet: View {
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                                     .stroke(Color.white.opacity(auth.canEditEmailPassword ? 0.12 : 0.08), lineWidth: 1)
+                            )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Phone number")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        TextField("Optional", text: $phoneNumber)
+                            .textFieldStyle(.plain)
+                            .keyboardType(.phonePad)
+                            .padding(.horizontal, 14)
+                            .frame(height: 46)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Location")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        TextField("City, State", text: $location)
+                            .textFieldStyle(.plain)
+                            .textInputAutocapitalization(.words)
+                            .padding(.horizontal, 14)
+                            .frame(height: 46)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Website")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        TextField("Optional", text: $website)
+                            .textFieldStyle(.plain)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding(.horizontal, 14)
+                            .frame(height: 46)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Bio")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        TextField("Tell us a bit about you", text: $bio, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .lineLimit(3...5)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
                             )
                     }
 
@@ -311,6 +536,10 @@ private struct EditProfileSheet: View {
                                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                                 )
                         }
+                    } else {
+                        Text("Password changes are available for email sign-in accounts only.")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
                     }
 
                     if let message = auth.displayErrorMessage, !message.isEmpty {
@@ -351,6 +580,13 @@ private struct EditProfileSheet: View {
                                 currentPassword: (emailChanged || wantsPasswordChange) ? currentPassword : nil
                             )
                             if ok {
+                                ProfileExtrasStore.save(
+                                    phoneNumber: phoneNumber,
+                                    location: location,
+                                    bio: bio,
+                                    website: website,
+                                    photoData: photoData
+                                )
                                 dismiss()
                             }
                         }
@@ -377,8 +613,22 @@ private struct EditProfileSheet: View {
                 currentPassword = ""
                 newPassword = ""
                 confirmNewPassword = ""
+                phoneNumber = ProfileExtrasStore.loadPhoneNumber()
+                location = ProfileExtrasStore.loadLocation()
+                bio = ProfileExtrasStore.loadBio()
+                website = ProfileExtrasStore.loadWebsite()
+                photoData = ProfileExtrasStore.loadProfileImageData()
+            }
+            .onChange(of: selectedPhoto) { _, newValue in
+                guard let newValue else { return }
+                Task { @MainActor in
+                    if let data = try? await newValue.loadTransferable(type: Data.self) {
+                        photoData = data
+                    }
+                }
             }
         }
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -387,6 +637,62 @@ private struct EditProfileSheet: View {
                     .foregroundStyle(AppTheme.mint)
             }
         }
+    }
+}
+
+private enum ProfileExtrasStore {
+    private static let phoneKey = "recai.profile.phone"
+    private static let locationKey = "recai.profile.location"
+    private static let bioKey = "recai.profile.bio"
+    private static let websiteKey = "recai.profile.website"
+    private static let photoKey = "recai.profile.photo"
+
+    static func loadPhoneNumber() -> String {
+        UserDefaults.standard.string(forKey: phoneKey) ?? ""
+    }
+
+    static func loadLocation() -> String {
+        UserDefaults.standard.string(forKey: locationKey) ?? ""
+    }
+
+    static func loadBio() -> String {
+        UserDefaults.standard.string(forKey: bioKey) ?? ""
+    }
+
+    static func loadWebsite() -> String {
+        UserDefaults.standard.string(forKey: websiteKey) ?? ""
+    }
+
+    static func loadProfileImageData() -> Data? {
+        UserDefaults.standard.data(forKey: photoKey)
+    }
+
+    static func save(
+        phoneNumber: String,
+        location: String,
+        bio: String,
+        website: String,
+        photoData: Data?
+    ) {
+        UserDefaults.standard.set(phoneNumber, forKey: phoneKey)
+        UserDefaults.standard.set(location, forKey: locationKey)
+        UserDefaults.standard.set(bio, forKey: bioKey)
+        UserDefaults.standard.set(website, forKey: websiteKey)
+        if let photoData {
+            UserDefaults.standard.set(photoData, forKey: photoKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: photoKey)
+        }
+    }
+
+    static func loadProfileImage(data: Data? = nil) -> Image? {
+        let resolved = data ?? loadProfileImageData()
+        guard let resolved, let uiImage = UIImage(data: resolved) else { return nil }
+        return Image(uiImage: uiImage)
+    }
+
+    static func loadProfileImage() -> Image? {
+        loadProfileImage(data: nil)
     }
 }
 
@@ -456,9 +762,6 @@ struct SettingsView: View {
                         appearanceCard
                         captureCard
                         syncCard
-                        if auth.isSignedIn {
-                            accountActionsCard
-                        }
 
                         if !auth.isSignedIn {
                             Text("Sign in to sync preferences across devices.")
@@ -472,6 +775,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .transaction { $0.disablesAnimations = true }
         .onAppear {
             defaultZipInput = auth.defaultZipCode
         }
@@ -495,7 +799,6 @@ struct SettingsView: View {
 
     private var locationCard: some View     {
         let textFieldShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-        let cardShape = RoundedRectangle(cornerRadius: 20, style: .continuous)
         let isDarkMode = colorScheme == .dark
         let showZipDone = zipFocused
 
@@ -569,20 +872,11 @@ struct SettingsView: View {
         }
         .padding(16)
 
-        return Group {
-            if isDarkMode {
-                content
-                    .background(cardShape.fill(Color.white.opacity(0.05)))
-                    .overlay(cardShape.stroke(Color.white.opacity(0.08), lineWidth: 1))
-            } else {
-                content
-                    .glassCard(cornerRadius: 20)
-            }
-        }
+        return settingsCard(content)
     }
 
     private var appearanceCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let content = VStack(alignment: .leading, spacing: 12) {
             Text("Appearance")
                 .font(AppType.title(16))
                 .foregroundStyle(.primary)
@@ -595,12 +889,11 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             .tint(AppTheme.mint)
         }
-        .padding(16)
-        .glassCard(cornerRadius: 20)
+        return settingsCard(content)
     }
 
     private var captureCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let content = VStack(alignment: .leading, spacing: 12) {
             Text("Capture")
                 .font(AppType.title(16))
                 .foregroundStyle(.primary)
@@ -620,12 +913,11 @@ struct SettingsView: View {
                 .foregroundStyle(.primary)
                 .tint(AppTheme.mint)
         }
-        .padding(16)
-        .glassCard(cornerRadius: 20)
+        return settingsCard(content)
     }
 
     private var syncCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let content = VStack(alignment: .leading, spacing: 12) {
             Text("Sync")
                 .font(AppType.title(16))
                 .foregroundStyle(.primary)
@@ -639,48 +931,23 @@ struct SettingsView: View {
                 Text("Auto-sync requires a signed-in account.")
                     .font(AppType.body(12))
                     .foregroundStyle(.primary.opacity(0.7))
+            }
         }
-        }
-        .padding(16)
-        .glassCard(cornerRadius: 20)
+        return settingsCard(content)
     }
 
-    private var accountActionsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Account")
-                .font(AppType.title(16))
-                .foregroundStyle(.primary)
 
-            Text("Delete your account and all associated data from Supabase.")
-                .font(AppType.body(12))
-                .foregroundStyle(.primary.opacity(0.7))
-
-            Button {
-                showDeleteAlert = true
-            } label: {
-                HStack {
-                    Image(systemName: "trash")
-                    Text(auth.isLoading ? "Deleting..." : "Delete account")
-                        .font(AppType.title(14))
-                }
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(auth.isLoading)
-            .alert("Delete account?", isPresented: $showDeleteAlert) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
-                    auth.deleteAccount()
-                }
-            } message: {
-                Text("This action permanently deletes your account and cannot be undone.")
-            }
-        }
-        .padding(16)
-        .glassCard(cornerRadius: 20)
+    private func settingsCard<Content: View>(_ content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        return content
+            .padding(16)
+            .background(
+                shape.fill(AppTheme.cardGradient)
+            )
+            .overlay(
+                shape.stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            )
+            .transaction { $0.disablesAnimations = true }
     }
 }
 
@@ -723,8 +990,21 @@ private struct BadgeCard: View {
                 .foregroundStyle(.primary.opacity(0.6))
         }
         .padding(14)
-        .glassCard(cornerRadius: 18)
+        .accountCard(cornerRadius: 18)
         .opacity(unlocked ? 1.0 : 0.55)
+    }
+}
+
+// MARK: - Account card styling
+// NOTE: Use static backgrounds instead of ultraThinMaterial here.
+// Dynamic materials flash during scrolling and state updates on this screen.
+private extension View {
+    func accountCard(cornerRadius: CGFloat = 20) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return self
+            .background(shape.fill(AppTheme.cardGradient))
+            .overlay(shape.stroke(Color.primary.opacity(0.12), lineWidth: 1))
+            .transaction { $0.disablesAnimations = true }
     }
 }
 

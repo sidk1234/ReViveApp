@@ -114,6 +114,7 @@ final class HistoryStore: ObservableObject {
     }
 
     private let storageKey = "recai.history.v1"
+    private let storageFilename = "impact-history.json"
 
     init() {
         load()
@@ -183,15 +184,33 @@ final class HistoryStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return }
-        if let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+        if let data = try? Data(contentsOf: storageURL()),
+           let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
             entries = decoded
+            return
+        }
+
+        guard let legacy = UserDefaults.standard.data(forKey: storageKey) else { return }
+        if let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: legacy) {
+            entries = decoded
+            save()
+            UserDefaults.standard.removeObject(forKey: storageKey)
         }
     }
 
     private func save() {
         guard let data = try? JSONEncoder().encode(entries) else { return }
+        try? data.write(to: storageURL(), options: [.atomic])
         UserDefaults.standard.set(data, forKey: storageKey)
+    }
+
+    private func storageURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("ReVive", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent(storageFilename)
     }
 
     private func duplicateIndex(for result: AIRecyclingResult) -> Int? {

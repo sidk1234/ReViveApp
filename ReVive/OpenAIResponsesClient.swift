@@ -88,15 +88,23 @@ final class OpenAIResponsesClient {
         guard let http = response as? HTTPURLResponse else {
             throw OpenAIError.httpError(-1, "No HTTP response")
         }
+        notifyGuestQuotaIfNeeded(http)
 
         if !(200...299).contains(http.statusCode) {
             let msg = String(data: data, encoding: .utf8) ?? "(no body)"
             throw OpenAIError.httpError(http.statusCode, msg)
         }
 
-        let decoded = try JSONDecoder().decode(ProxyResponse.self, from: data)
-        guard !decoded.text.isEmpty else { throw OpenAIError.noTextReturned }
-        return decoded.text
+        if let decoded = try? JSONDecoder().decode(ProxyResponse.self, from: data) {
+            let trimmed = decoded.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+
+        if let extracted = extractText(from: data) {
+            return extracted
+        }
+
+        throw OpenAIError.noTextReturned
     }
 
     func analyzeText(
@@ -131,15 +139,23 @@ final class OpenAIResponsesClient {
         guard let http = response as? HTTPURLResponse else {
             throw OpenAIError.httpError(-1, "No HTTP response")
         }
+        notifyGuestQuotaIfNeeded(http)
 
         if !(200...299).contains(http.statusCode) {
             let msg = String(data: data, encoding: .utf8) ?? "(no body)"
             throw OpenAIError.httpError(http.statusCode, msg)
         }
 
-        let decoded = try JSONDecoder().decode(ProxyResponse.self, from: data)
-        guard !decoded.text.isEmpty else { throw OpenAIError.noTextReturned }
-        return decoded.text
+        if let decoded = try? JSONDecoder().decode(ProxyResponse.self, from: data) {
+            let trimmed = decoded.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+
+        if let extracted = extractText(from: data) {
+            return extracted
+        }
+
+        throw OpenAIError.noTextReturned
     }
 }
 
@@ -152,6 +168,71 @@ private func applyAuthHeaders(_ request: inout URLRequest, accessToken: String?,
     if let anonKey, !anonKey.isEmpty {
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
     }
+}
+
+private func notifyGuestQuotaIfNeeded(_ response: HTTPURLResponse) {
+    guard
+        let remainingValue = response.value(forHTTPHeaderField: "x-revive-guest-remaining"),
+        let usedValue = response.value(forHTTPHeaderField: "x-revive-guest-used"),
+        let limitValue = response.value(forHTTPHeaderField: "x-revive-guest-limit"),
+        let remaining = Int(remainingValue),
+        let used = Int(usedValue),
+        let limit = Int(limitValue)
+    else { return }
+
+    let quota = GuestQuota(used: used, remaining: remaining, limit: limit)
+    NotificationCenter.default.post(name: .reviveGuestQuotaUpdated, object: quota)
+}
+
+extension Notification.Name {
+    static let reviveGuestQuotaUpdated = Notification.Name("revive.guestQuotaUpdated")
+}
+
+private func extractText(from data: Data) -> String? {
+    guard let json = try? JSONSerialization.jsonObject(with: data, options: []) else { return nil }
+
+    func extractFromChatChoices(_ value: Any) -> String? {
+        guard let dict = value as? [String: Any],
+              let choices = dict["choices"] as? [[String: Any]]
+        else { return nil }
+        for choice in choices {
+            if let message = choice["message"] as? [String: Any],
+               let content = message["content"] as? String {
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
+    }
+
+    func findText(_ value: Any) -> String? {
+        if let str = value as? String {
+            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let dict = value as? [String: Any] {
+            if let fromChoices = extractFromChatChoices(dict) {
+                return fromChoices
+            }
+            let keys = ["text", "output_text", "content", "message", "result"]
+            for key in keys {
+                if let candidate = dict[key], let found = findText(candidate) {
+                    return found
+                }
+            }
+            for (_, v) in dict {
+                if let found = findText(v) { return found }
+            }
+        }
+        if let array = value as? [Any] {
+            for v in array {
+                if let found = findText(v) { return found }
+            }
+        }
+        return nil
+    }
+
+    return findText(json)
 }
 
 private extension UIImage {

@@ -9,15 +9,21 @@ import AVFoundation
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    let videoOrientation: AVCaptureVideoOrientation
 
     func makeUIView(context: Context) -> PreviewUIView {
         let view = PreviewUIView()
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
+        view.previewLayer.connection?.videoOrientation = videoOrientation
         return view
     }
 
-    func updateUIView(_ uiView: PreviewUIView, context: Context) {}
+    func updateUIView(_ uiView: PreviewUIView, context: Context) {
+        if let connection = uiView.previewLayer.connection {
+            connection.videoOrientation = videoOrientation
+        }
+    }
 }
 
 /// Minimal UIView that owns the preview layer
@@ -36,6 +42,5 @@ final class PreviewUIView: UIView {
         previewLayer.frame = bounds
     }
 }
-
 
 

@@ -26,6 +26,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     @Published var cameraErrorText: String?
     @Published var noItemDetected: Bool = false
     @Published var hapticsEnabled: Bool = true
+    @Published var zoomFactor: CGFloat = 1.0
+
+    private let maxZoomLimit: CGFloat = 5.0
+    private var minZoomFactor: CGFloat = 1.0
+    private var maxZoomFactor: CGFloat = 5.0
     
     //MARK: - OpenAI
     private let openAI = OpenAIResponsesClient()
@@ -35,6 +40,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private let output = AVCapturePhotoOutput()
     private var isConfigured = false
+    private var videoDevice: AVCaptureDevice?
 
     // MARK: - CI
     private let ciContext = CIContext()
@@ -51,6 +57,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
     // Keep the selected mask + captured CI for export (aligned to photo extent)
     private var capturedCI: CIImage?
+    @Published var videoOrientation: AVCaptureVideoOrientation = .portrait
 
     override init() {
         super.init()
@@ -85,6 +92,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             setCameraError("Camera unavailable.")
             return
         }
+        videoDevice = device
+        maxZoomFactor = min(device.activeFormat.videoMaxZoomFactor, maxZoomLimit)
 
         do {
             let input = try AVCaptureDeviceInput(device: device)
@@ -112,6 +121,50 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         session.commitConfiguration()
         isConfigured = true
         clearCameraError()
+        updateOrientation()
+    }
+
+    @MainActor
+    func updateOrientation() {
+        let deviceOrientation = UIDevice.current.orientation
+        let newOrientation = mapDeviceOrientation(deviceOrientation)
+        videoOrientation = newOrientation
+
+        sessionQueue.async {
+            if let connection = self.output.connection(with: .video) {
+                connection.videoOrientation = newOrientation
+            }
+        }
+    }
+
+    private func mapDeviceOrientation(_ orientation: UIDeviceOrientation) -> AVCaptureVideoOrientation {
+        switch orientation {
+        case .landscapeLeft:
+            return .landscapeRight
+        case .landscapeRight:
+            return .landscapeLeft
+        case .portraitUpsideDown:
+            return .portraitUpsideDown
+        default:
+            return .portrait
+        }
+    }
+
+    func setZoomFactor(_ factor: CGFloat) {
+        sessionQueue.async {
+            guard let device = self.videoDevice else { return }
+            let clamped = max(self.minZoomFactor, min(factor, self.maxZoomFactor))
+            do {
+                try device.lockForConfiguration()
+                device.videoZoomFactor = clamped
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.zoomFactor = clamped
+                }
+            } catch {
+                // Ignore zoom failure
+            }
+        }
     }
 
     private func setCameraError(_ message: String) {
@@ -144,6 +197,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                 self.session.stopRunning()
             }
         }
+    }
+
+    func clearCapturedImage() {
+        capturedImage = nil
+        capturedCI = nil
     }
 
     func takePhoto() {
@@ -199,24 +257,39 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
         Task {
             do {
-                let text = try await openAI.analyzeImage(
+                let text = try await analyzeImageWithRetry(
                     prompt: prompt,
                     image: imageToSend,
                     contextImage: contextImage,
-                    maxOutputTokens: 400,
                     useWebSearch: useWebSearch,
                     accessToken: accessToken
                 )
-                await MainActor.run {
-                    self.aiResultText = text
-                    if let parsed = self.parseResponse(text) {
+                if let parsed = self.parseResponse(text) {
+                    await MainActor.run {
+                        self.aiResultText = text
                         self.aiParsedResult = parsed
                         self.aiErrorText = nil
-                    } else {
-                        self.aiParsedResult = nil
-                        self.aiErrorText = "Couldn't parse response. Please try again."
+                        self.aiIsLoading = false
                     }
-                    self.aiIsLoading = false
+                } else {
+                    let retryText = try await analyzeImageWithRetry(
+                        prompt: prompt,
+                        image: imageToSend,
+                        contextImage: contextImage,
+                        useWebSearch: useWebSearch,
+                        accessToken: accessToken
+                    )
+                    await MainActor.run {
+                        self.aiResultText = retryText
+                        if let parsed = self.parseResponse(retryText) {
+                            self.aiParsedResult = parsed
+                            self.aiErrorText = nil
+                        } else {
+                            self.aiParsedResult = nil
+                            self.aiErrorText = "Couldn't parse response. Please try again."
+                        }
+                        self.aiIsLoading = false
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -244,22 +317,35 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
         Task {
             do {
-                let text = try await openAI.analyzeText(
+                let text = try await analyzeTextWithRetry(
                     prompt: prompt,
-                    maxOutputTokens: 400,
                     useWebSearch: useWebSearch,
                     accessToken: accessToken
                 )
-                await MainActor.run {
-                    self.aiResultText = text
-                    if let parsed = self.parseResponse(text) {
+                if let parsed = self.parseResponse(text) {
+                    await MainActor.run {
+                        self.aiResultText = text
                         self.aiParsedResult = parsed
                         self.aiErrorText = nil
-                    } else {
-                        self.aiParsedResult = nil
-                        self.aiErrorText = "Couldn't parse response. Please try again."
+                        self.aiIsLoading = false
                     }
-                    self.aiIsLoading = false
+                } else {
+                    let retryText = try await analyzeTextWithRetry(
+                        prompt: prompt,
+                        useWebSearch: useWebSearch,
+                        accessToken: accessToken
+                    )
+                    await MainActor.run {
+                        self.aiResultText = retryText
+                        if let parsed = self.parseResponse(retryText) {
+                            self.aiParsedResult = parsed
+                            self.aiErrorText = nil
+                        } else {
+                            self.aiParsedResult = nil
+                            self.aiErrorText = "Couldn't parse response. Please try again."
+                        }
+                        self.aiIsLoading = false
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -276,30 +362,30 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         guard let img = capturedImage else { return }
         guard !instanceMasks.isEmpty else { return }
 
-        // Work in POINTS for mapping, then convert to PIXELS for mask sampling
-        let iwPts = img.size.width
-        let ihPts = img.size.height
+        // Map view -> image pixels using the same basis as the mask buffers.
         let vw = viewSize.width
         let vh = viewSize.height
+        let iwPx = capturedCI?.extent.width ?? (img.size.width * img.scale)
+        let ihPx = capturedCI?.extent.height ?? (img.size.height * img.scale)
 
-        let scale = max(vw / iwPts, vh / ihPts) // aspectFill
-        let dw = iwPts * scale
-        let dh = ihPts * scale
+        let scale = max(vw / iwPx, vh / ihPx) // aspectFill
+        let dw = iwPx * scale
+        let dh = ihPx * scale
         let x0 = (vw - dw) * 0.5
         let y0 = (vh - dh) * 0.5
 
-        let ixPts = (viewPoint.x - x0) / scale
-        let iyPts = (viewPoint.y - y0) / scale
+        let ixPx = (viewPoint.x - x0) / scale
+        let iyPx = (viewPoint.y - y0) / scale
 
-        if ixPts < 0 || iyPts < 0 || ixPts >= iwPts || iyPts >= ihPts {
+        if ixPx < 0 || iyPx < 0 || ixPx >= iwPx || iyPx >= ihPx {
             clearSelection()
             return
         }
 
-        let ix = Int((ixPts * img.scale).rounded(.down))
-        let iy = Int((iyPts * img.scale).rounded(.down))
+        let ix = Int(ixPx.rounded(.down))
+        let iy = Int(iyPx.rounded(.down))
 
-        if let hitIndex = instanceMasks.firstIndex(where: { isMaskHit(in: $0.maskBuffer, x: ix, y: iy) }) {
+        if let hitIndex = bestMaskIndex(x: ix, y: iy) {
             if selectedInstanceIndex == hitIndex {
                 clearSelection()
             } else {
@@ -324,15 +410,28 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         fillImage = makeFillImage(from: instanceMasks[index].scaledMaskCI)
     }
 
-    private func isMaskHit(in pb: CVPixelBuffer, x: Int, y: Int) -> Bool {
+    private func bestMaskIndex(x: Int, y: Int) -> Int? {
+        var bestIndex: Int?
+        var bestScore: Int = 0
+        for (idx, mask) in instanceMasks.enumerated() {
+            let score = maskHitScore(in: mask.maskBuffer, x: x, y: y)
+            if score > bestScore {
+                bestScore = score
+                bestIndex = idx
+            }
+        }
+        return bestIndex
+    }
+
+    private func maskHitScore(in pb: CVPixelBuffer, x: Int, y: Int) -> Int {
         let w = CVPixelBufferGetWidth(pb)
         let h = CVPixelBufferGetHeight(pb)
-        guard x >= 0, y >= 0, x < w, y < h else { return false }
+        guard x >= 0, y >= 0, x < w, y < h else { return 0 }
 
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
 
-        guard let base = CVPixelBufferGetBaseAddress(pb) else { return false }
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return 0 }
         let bpr = CVPixelBufferGetBytesPerRow(pb)
 
         @inline(__always) func sample(_ sx: Int, _ sy: Int) -> UInt8 {
@@ -340,13 +439,25 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             return row.assumingMemoryBound(to: UInt8.self)[sx]
         }
 
-        // sample both y and flipped-y (robust to coordinate flips)
-        let v1 = sample(x, y)
-        let fy = h - 1 - y
-        let v2 = (fy >= 0 && fy < h) ? sample(x, fy) : 0
-
         let threshold: UInt8 = 80
-        return v1 > threshold || v2 > threshold
+        let radius = 3
+        var score = 0
+        for dy in -radius...radius {
+            let yy = y + dy
+            if yy < 0 || yy >= h { continue }
+            let fy = h - 1 - yy
+            for dx in -radius...radius {
+                let xx = x + dx
+                if xx < 0 || xx >= w { continue }
+                let v1 = sample(xx, yy)
+                if v1 > threshold { score += 1 }
+                if fy >= 0 && fy < h {
+                    let v2 = sample(xx, fy)
+                    if v2 > threshold { score += 1 }
+                }
+            }
+        }
+        return score
     }
 
     // MARK: - Export / Save selected subject
@@ -631,47 +742,203 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         return sanitizeResult(parsed)
     }
 
+    private func analyzeImageWithRetry(
+        prompt: String,
+        image: UIImage,
+        contextImage: UIImage?,
+        useWebSearch: Bool,
+        accessToken: String?
+    ) async throws -> String {
+        do {
+            return try await openAI.analyzeImage(
+                prompt: prompt,
+                image: image,
+                contextImage: contextImage,
+                maxOutputTokens: 400,
+                useWebSearch: useWebSearch,
+                accessToken: accessToken
+            )
+        } catch let error as OpenAIResponsesClient.OpenAIError {
+            if case .noTextReturned = error {
+                try await Task.sleep(nanoseconds: 400_000_000)
+                return try await openAI.analyzeImage(
+                    prompt: prompt,
+                    image: image,
+                    contextImage: contextImage,
+                    maxOutputTokens: 400,
+                    useWebSearch: useWebSearch,
+                    accessToken: accessToken
+                )
+            }
+            throw error
+        }
+    }
+
+    private func analyzeTextWithRetry(
+        prompt: String,
+        useWebSearch: Bool,
+        accessToken: String?
+    ) async throws -> String {
+        do {
+            return try await openAI.analyzeText(
+                prompt: prompt,
+                maxOutputTokens: 400,
+                useWebSearch: useWebSearch,
+                accessToken: accessToken
+            )
+        } catch let error as OpenAIResponsesClient.OpenAIError {
+            if case .noTextReturned = error {
+                try await Task.sleep(nanoseconds: 400_000_000)
+                return try await openAI.analyzeText(
+                    prompt: prompt,
+                    maxOutputTokens: 400,
+                    useWebSearch: useWebSearch,
+                    accessToken: accessToken
+                )
+            }
+            throw error
+        }
+    }
+
     private func decodeResult(from text: String) -> AIRecyclingResult? {
         guard let data = text.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(AIRecyclingResult.self, from: data)
+        if let decoded = try? JSONDecoder().decode(AIRecyclingResult.self, from: data) {
+            return decoded
+        }
+        return decodeFlexibleJSON(data)
+    }
+
+    private func decodeFlexibleJSON(_ data: Data) -> AIRecyclingResult? {
+        guard let json = try? JSONSerialization.jsonObject(with: data, options: []) else { return nil }
+
+        let object: [String: Any]?
+        if let dict = json as? [String: Any] {
+            object = dict
+        } else if let array = json as? [[String: Any]] {
+            object = array.first
+        } else {
+            object = nil
+        }
+
+        guard let object else { return nil }
+
+        func stringValue(_ key: String) -> String? {
+            if let value = object[key] as? String { return value }
+            if let value = object[key.lowercased()] as? String { return value }
+            if let value = object[key.uppercased()] as? String { return value }
+            return nil
+        }
+
+        func boolValue(_ key: String) -> Bool? {
+            if let value = object[key] as? Bool { return value }
+            if let value = object[key.lowercased()] as? Bool { return value }
+            if let value = object[key.uppercased()] as? Bool { return value }
+            if let str = stringValue(key)?.lowercased() {
+                if str.contains("yes") || str.contains("true") || str.contains("recyclable") { return true }
+                if str.contains("no") || str.contains("false") || str.contains("not recyclable") { return false }
+            }
+            if let num = object[key] as? NSNumber { return num.boolValue }
+            if let num = object[key.lowercased()] as? NSNumber { return num.boolValue }
+            if let num = object[key.uppercased()] as? NSNumber { return num.boolValue }
+            return nil
+        }
+
+        let item = stringValue("item") ?? "unknown"
+        let material = stringValue("material") ?? "unknown"
+        let notes = stringValue("notes") ?? ""
+        let bin = stringValue("bin") ?? stringValue("disposal") ?? stringValue("destination") ?? "unknown"
+        let recyclable = boolValue("recyclable") ?? inferRecyclable(from: bin)
+
+        if item == "unknown", material == "unknown", bin == "unknown", notes.isEmpty {
+            return nil
+        }
+
+        return AIRecyclingResult(item: item, material: material, recyclable: recyclable, bin: bin, notes: notes)
     }
 
     private func parseKeyValueResponse(_ text: String) -> AIRecyclingResult? {
-        var map: [String: String] = [:]
+        let map = extractKeyValueMap(from: text)
 
-        text
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .forEach { line in
-                let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-                guard parts.count == 2 else { return }
-                let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-                let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                if !key.isEmpty {
+        let item = map["ITEM"] ?? "unknown"
+        let material = map["MATERIAL"] ?? "unknown"
+        let notes = map["NOTES"] ?? ""
+        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? "unknown"
+
+        let recyclable: Bool
+        if let recyclableRaw = map["RECYCLABLE"] {
+            let lower = recyclableRaw.lowercased()
+            if lower.contains("no") || lower.contains("false") || lower.contains("not recyclable") {
+                recyclable = false
+            } else if lower.contains("yes") || lower.contains("true") || lower.contains("recyclable") {
+                recyclable = true
+            } else {
+                recyclable = inferRecyclable(from: bin)
+            }
+        } else {
+            recyclable = inferRecyclable(from: bin)
+        }
+
+        if item == "unknown", material == "unknown", bin == "unknown", notes.isEmpty {
+            return nil
+        }
+
+        return AIRecyclingResult(item: item, material: material, recyclable: recyclable, bin: bin, notes: notes)
+    }
+
+    private func extractKeyValueMap(from text: String) -> [String: String] {
+        let normalized = text.replacingOccurrences(of: "\r", with: "\n")
+        var map: [String: String] = [:]
+        let fields = ["NOTES", "ITEM", "MATERIAL", "RECYCLABLE", "BIN", "DISPOSAL", "DESTINATION"]
+        let fieldsPattern = fields.joined(separator: "|")
+
+        for field in fields {
+            let pattern = "(?is)\\b" + field + "\\b\\s*[:=\\-]\\s*(.+?)(?=\\b(?:"
+                + fieldsPattern
+                + ")\\b\\s*[:=\\-]|$)"
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }
+            let range = NSRange(normalized.startIndex..., in: normalized)
+            if let match = regex.firstMatch(in: normalized, options: [], range: range),
+               let valueRange = Range(match.range(at: 1), in: normalized) {
+                let raw = String(normalized[valueRange])
+                let cleaned = raw
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "-•*"))
+                if !cleaned.isEmpty {
+                    map[field] = cleaned
+                }
+            }
+        }
+
+        if map.isEmpty {
+            for rawLine in normalized.split(whereSeparator: \.isNewline) {
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                if line.isEmpty { continue }
+                let parts = line.split(
+                    maxSplits: 1,
+                    omittingEmptySubsequences: false,
+                    whereSeparator: { $0 == ":" || $0 == "=" }
+                )
+                if parts.count != 2 { continue }
+                let key = parts[0].trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).uppercased()
+                let value = parts[1].trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                if !key.isEmpty, !value.isEmpty {
                     map[key] = value
                 }
             }
-
-        guard
-            let item = map["ITEM"],
-            let material = map["MATERIAL"],
-            let recyclableRaw = map["RECYCLABLE"],
-            let bin = map["BIN"]
-        else { return nil }
-
-        let lower = recyclableRaw.lowercased()
-        let recyclable: Bool
-        if lower.contains("no") || lower.contains("false") || lower.contains("not recyclable") {
-            recyclable = false
-        } else if lower.contains("yes") || lower.contains("true") || lower.contains("recyclable") {
-            recyclable = true
-        } else {
-            recyclable = false
         }
 
-        let notes = map["NOTES"] ?? ""
-        return AIRecyclingResult(item: item, material: material, recyclable: recyclable, bin: bin, notes: notes)
+        return map
+    }
+
+    private func inferRecyclable(from bin: String) -> Bool {
+        let lower = bin.lowercased()
+        if lower.contains("trash") || lower.contains("landfill") || lower.contains("garbage") {
+            return false
+        }
+        if lower.contains("recycle") || lower.contains("curbside") {
+            return true
+        }
+        return false
     }
 
     private func extractJSONCandidate(from text: String) -> String? {

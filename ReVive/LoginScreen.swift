@@ -26,13 +26,24 @@ struct LoginScreen: View {
     @State private var confirmPassword = ""
     @State private var notice: String?
     @FocusState private var focusedField: AuthField?
+    @State private var lastDuplicateEmail: String?
 
     private var isCreate: Bool { mode == .create }
+    private var confirmOutlineColor: Color? {
+        guard isCreate else { return nil }
+        let shouldShow =
+            focusedField == .confirmPassword ||
+            !confirmPassword.isEmpty ||
+            !password.isEmpty
+        guard shouldShow else { return nil }
+        return (!confirmPassword.isEmpty && password == confirmPassword) ? .green : .red
+    }
 
     var body: some View {
         AuthShell(isCreate: isCreate) {
             authCard
         }
+        .transaction { $0.disablesAnimations = true }
         .task {
             auth.refreshGuestQuota()
         }
@@ -46,16 +57,22 @@ struct LoginScreen: View {
                 .foregroundStyle(AppTheme.mint)
             }
         }
+        .onChange(of: auth.displayErrorMessage) { _, newValue in
+            guard let message = newValue?.lowercased() else { return }
+            if message.contains("already exists") || message.contains("already registered") {
+                lastDuplicateEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
     }
 
     private var authCard: some View {
         ZStack {
             if mode == .signIn {
                 signInCard
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
             } else {
                 createCard
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
         }
         .animation(.easeInOut(duration: 0.18), value: mode)
@@ -161,7 +178,7 @@ struct LoginScreen: View {
         }
         .padding(22)
         .frame(maxWidth: 420)
-        .glassCard(cornerRadius: 24)
+        .staticCard(cornerRadius: 24)
     }
 
     private var createCard: some View {
@@ -217,6 +234,7 @@ struct LoginScreen: View {
                 keyboard: .default,
                 contentType: .newPassword,
                 isSecure: true,
+                outlineColor: confirmOutlineColor,
                 submitLabel: .done,
                 onSubmit: { focusedField = nil },
                 field: .confirmPassword,
@@ -261,7 +279,7 @@ struct LoginScreen: View {
         }
         .padding(22)
         .frame(maxWidth: 420)
-        .glassCard(cornerRadius: 24)
+        .staticCard(cornerRadius: 24)
     }
 
     private func submitSignIn() {
@@ -297,6 +315,11 @@ struct LoginScreen: View {
             return
         }
 
+        if let lastDuplicateEmail, lastDuplicateEmail == trimmedEmail {
+            auth.errorMessage = "An account already exists for this email. Please sign in instead."
+            return
+        }
+
         auth.signUpWithEmail(email: trimmedEmail, password: password)
     }
 
@@ -306,7 +329,9 @@ struct LoginScreen: View {
         auth.errorMessage = nil
         confirmPassword = ""
         focusedField = nil
-        mode = newMode
+        withAnimation(.easeInOut(duration: 0.18)) {
+            mode = newMode
+        }
     }
 
     private func signInWithGoogle() {
@@ -351,6 +376,7 @@ private struct AuthShell<Right: View>: View {
                 .padding(.top, 40)
                 .padding(.bottom, 120)
             }
+            .textSelection(.disabled)
         }
     }
 }
@@ -411,10 +437,47 @@ private struct AuthTextField: View {
     let keyboard: UIKeyboardType
     let contentType: UITextContentType?
     let isSecure: Bool
+    let outlineColor: Color?
     let submitLabel: SubmitLabel
     let onSubmit: (() -> Void)?
     let field: AuthField
     let focus: FocusState<AuthField?>.Binding
+    @State private var isPasswordVisible = false
+
+    private var showsVisibilityToggle: Bool { isSecure }
+
+    private var resolvedOutlineColor: Color {
+        if let outlineColor {
+            return outlineColor
+        }
+        return Color.white.opacity(colorScheme == .dark ? 0.12 : 0.2)
+    }
+
+    init(
+        label: String,
+        placeholder: String,
+        text: Binding<String>,
+        keyboard: UIKeyboardType,
+        contentType: UITextContentType?,
+        isSecure: Bool,
+        outlineColor: Color? = nil,
+        submitLabel: SubmitLabel,
+        onSubmit: (() -> Void)?,
+        field: AuthField,
+        focus: FocusState<AuthField?>.Binding
+    ) {
+        self.label = label
+        self.placeholder = placeholder
+        self._text = text
+        self.keyboard = keyboard
+        self.contentType = contentType
+        self.isSecure = isSecure
+        self.outlineColor = outlineColor
+        self.submitLabel = submitLabel
+        self.onSubmit = onSubmit
+        self.field = field
+        self.focus = focus
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -422,27 +485,46 @@ private struct AuthTextField: View {
                 .font(AppType.body(12))
                 .foregroundStyle(.primary.opacity(0.7))
 
-            Group {
-                if isSecure {
-                    SecureField(placeholder, text: $text)
-                } else {
-                    TextField(placeholder, text: $text)
+            ZStack(alignment: .trailing) {
+                Group {
+                    if isSecure && !isPasswordVisible {
+                        SecureField(placeholder, text: $text)
+                    } else {
+                        TextField(placeholder, text: $text)
+                    }
+                }
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(keyboard)
+                .textContentType(contentType)
+                .submitLabel(submitLabel)
+                .onSubmit {
+                    onSubmit?()
+                }
+                .textFieldStyle(.plain)
+                .foregroundStyle(.primary)
+                .tint(AppTheme.mint)
+                .focused(focus, equals: field)
+                .padding(.leading, 14)
+                .padding(.trailing, showsVisibilityToggle ? 44 : 14)
+                .frame(height: 46)
+
+                if showsVisibilityToggle {
+                    Button {
+                        isPasswordVisible.toggle()
+                        DispatchQueue.main.async {
+                            focus.wrappedValue = field
+                        }
+                    } label: {
+                        Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 14)
+                    .accessibilityLabel(isPasswordVisible ? "Hide password" : "Show password")
                 }
             }
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .keyboardType(keyboard)
-            .textContentType(contentType)
-            .submitLabel(submitLabel)
-            .onSubmit {
-                onSubmit?()
-            }
-            .textFieldStyle(.plain)
-            .foregroundStyle(.primary)
-            .tint(AppTheme.mint)
-            .focused(focus, equals: field)
-            .padding(.horizontal, 14)
-            .frame(height: 46)
             .background(
                 Group {
                     if colorScheme == .dark {
@@ -456,7 +538,13 @@ private struct AuthTextField: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.2), lineWidth: 1)
+                    .stroke(resolvedOutlineColor, lineWidth: 1)
+            )
+            .shadow(
+                color: (outlineColor ?? .clear).opacity(0.45),
+                radius: outlineColor == nil ? 0 : 6,
+                x: 0,
+                y: 0
             )
         }
     }

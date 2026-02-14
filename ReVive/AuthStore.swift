@@ -28,7 +28,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     @Published var isAdmin: Bool = false
     @Published var photoStorageEnabled: Bool = false
     @Published var preferences: UserPreferences = .default
-    @Published var guestQuota: GuestQuota?
+    @Published var guestQuota: GuestQuota? {
+        didSet {
+            saveGuestQuota(guestQuota)
+        }
+    }
 
     var displayErrorMessage: String? {
         guard let message = errorMessage, !message.isEmpty else { return nil }
@@ -88,6 +92,8 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
 
     private let sessionKey = "recai.supabase.session"
     private let preferencesKey = "recai.user.preferences"
+    private let guestQuotaKey = "recai.guest.quota"
+    private let guestQuotaFilename = "guest-quota.json"
     private var currentNonce: String?
     private var needsProfileRefresh = false
     private var didAttemptGoogleRestore = false
@@ -117,6 +123,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     override init() {
         super.init()
         loadPreferences()
+        loadGuestQuota()
 
         if SupabaseConfig.load() == nil {
             let diag = SupabaseConfig.diagnostics()
@@ -126,6 +133,41 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
 
         restoreSession()
+    }
+
+    private func loadGuestQuota() {
+        if let data = try? Data(contentsOf: guestQuotaURL()),
+           let decoded = try? JSONDecoder().decode(GuestQuota.self, from: data) {
+            guestQuota = decoded
+            return
+        }
+
+        guard let data = UserDefaults.standard.data(forKey: guestQuotaKey) else { return }
+        if let decoded = try? JSONDecoder().decode(GuestQuota.self, from: data) {
+            guestQuota = decoded
+            saveGuestQuota(decoded)
+            UserDefaults.standard.removeObject(forKey: guestQuotaKey)
+        }
+    }
+
+    private func saveGuestQuota(_ quota: GuestQuota?) {
+        let url = guestQuotaURL()
+        if let quota, let data = try? JSONEncoder().encode(quota) {
+            try? data.write(to: url, options: [.atomic])
+            UserDefaults.standard.set(data, forKey: guestQuotaKey)
+        } else {
+            try? FileManager.default.removeItem(at: url)
+            UserDefaults.standard.removeObject(forKey: guestQuotaKey)
+        }
+    }
+
+    private func guestQuotaURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("ReVive", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent(guestQuotaFilename)
     }
 
     // ✅ Added: centralized diagnostic log
@@ -610,7 +652,8 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 email: emailChangeRequested ? trimmedEmail : user.email,
                 displayName: trimmed,
                 preferences: user.preferences,
-                authProviders: user.authProviders
+                authProviders: user.authProviders,
+                avatarURL: user.avatarURL
             )
             return true
         } catch {
@@ -719,6 +762,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                     break
                 }
             }
+            await self.loadUserAndProfile()
         }
     }
 
@@ -819,22 +863,8 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         userId: String,
         history: HistoryStore
     ) async -> String? {
-        guard photoStorageEnabled else { return nil }
-        guard entry.source == .photo else { return nil }
-        if let remote = entry.remoteImagePath {
-            return remote
-        }
-        guard let localPath = entry.localImagePath else { return nil }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: localPath)) else { return nil }
-
-        let path = "\(userId)/\(ImpactKey.dayKey(for: entry.date))/\(entry.id.uuidString).jpg"
-        do {
-            try await supabase?.uploadImpactImage(data: data, path: path, accessToken: accessToken)
-            history.updateRemoteImagePath(entryID: entry.id, path: path)
-            return path
-        } catch {
-            return nil
-        }
+        // Photo uploads are disabled for now; keep images local only.
+        return nil
     }
 
     private func completeIDTokenSignIn(provider: String, idToken: String, nonce: String?) async {
@@ -855,10 +885,20 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             switch serviceError {
             case .httpError(let code, let body):
                 let message = parseSupabaseErrorMessage(body)
+                if provider == "email" {
+                    let lowercased = message.lowercased()
+                    if lowercased.contains("already registered")
+                        || lowercased.contains("already exists")
+                        || lowercased.contains("user exists") {
+                        return "An account already exists for this email. Please sign in instead."
+                    }
+                }
                 if provider == "google", message.lowercased().contains("nonce") {
                     return "Supabase HTTP \(code): Nonce mismatch. Enable Skip nonce check for iOS in Supabase Auth > Providers > Google."
                 }
                 return "Supabase HTTP \(code): \(message)"
+            case .emailAlreadyRegistered:
+                return "An account already exists for this email. Please sign in instead."
             case .invalidResponse:
                 return "Supabase returned an invalid response."
             case .invalidCallback:
@@ -899,6 +939,8 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             case .missingConfig:
                 let diag = SupabaseConfig.diagnostics()
                 return "Profile sync failed: Supabase config missing (\(diag.short))."
+            case .emailAlreadyRegistered:
+                return "Profile sync failed: email already registered."
             }
         }
         let nsError = error as NSError

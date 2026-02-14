@@ -42,7 +42,7 @@ struct ImpactView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(24)
-                        .glassCard(cornerRadius: 26)
+                        .staticCard(cornerRadius: 26)
                     } else {
                         LazyVStack(spacing: 14) {
                             ForEach(history.entries) { entry in
@@ -115,6 +115,10 @@ private struct ImpactHeader: View {
                 recyclableCount: recyclableCount,
                 impactScore: impactScore
             )
+
+            Text("Recyclable counts items marked recyclable. Impact equals recyclable scans (1 point each).")
+                .font(AppType.body(12))
+                .foregroundStyle(.primary.opacity(0.65))
 
             ImpactAccountRow(onGoToAccount: onGoToAccount)
         }
@@ -206,7 +210,7 @@ private struct ImpactCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18)
-            .glassCard(cornerRadius: 20)
+            .staticCard(cornerRadius: 20)
         }
         .buttonStyle(.plain)
     }
@@ -370,7 +374,7 @@ private struct ImpactDetailView: View {
                                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                                     .stroke(Color.primary.opacity(0.15), lineWidth: 1)
                             )
-                            .glassCard(cornerRadius: 22)
+                            .staticCard(cornerRadius: 22)
                     } else {
                         VStack(spacing: 10) {
                             Image(systemName: entry.source == .text ? "text.alignleft" : "photo")
@@ -382,7 +386,7 @@ private struct ImpactDetailView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(24)
-                        .glassCard(cornerRadius: 22)
+                        .staticCard(cornerRadius: 22)
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
@@ -417,7 +421,8 @@ private struct ImpactDetailView: View {
                         }
                     }
                     .padding(16)
-                    .glassCard(cornerRadius: 20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .staticCard(cornerRadius: 20)
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 28)

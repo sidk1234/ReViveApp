@@ -17,6 +17,7 @@ struct AppConfig: Codable, Equatable {
 enum AppConfigCache {
     private static let storageKey = "recai.app.config"
     private static let failureKey = "recai.app.config.failure"
+    private static let timestampKey = "recai.app.config.timestamp"
 
     static func load() -> AppConfig? {
         guard let data = UserDefaults.standard.data(forKey: storageKey) else { return nil }
@@ -26,11 +27,13 @@ enum AppConfigCache {
     static func save(_ config: AppConfig) {
         guard let data = try? JSONEncoder().encode(config) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: timestampKey)
         clearFailure()
     }
 
     static func clear() {
         UserDefaults.standard.removeObject(forKey: storageKey)
+        UserDefaults.standard.removeObject(forKey: timestampKey)
         clearFailure()
     }
 
@@ -46,6 +49,17 @@ enum AppConfigCache {
 
     static func clearFailure() {
         UserDefaults.standard.removeObject(forKey: failureKey)
+    }
+
+    static func loadTimestamp() -> Date? {
+        let interval = UserDefaults.standard.double(forKey: timestampKey)
+        guard interval > 0 else { return nil }
+        return Date(timeIntervalSince1970: interval)
+    }
+
+    static func isFresh(maxAge: TimeInterval) -> Bool {
+        guard let timestamp = loadTimestamp() else { return false }
+        return Date().timeIntervalSince(timestamp) < maxAge
     }
 }
 
@@ -92,17 +106,9 @@ final class AppConfigStore: ObservableObject {
             AppConfigLog.info("Using cached config.")
         }
 
-        guard let baseURL = BootstrapConfig.edgeBaseURL else {
-            if config == nil {
-                let message = "Missing edge base URL."
-                errorMessage = message
-                AppConfigCache.saveFailure(message)
-                AppConfigLog.error(message)
-            }
-            return
-        }
-
+        let baseURL = BootstrapConfig.edgeBaseURL
         if let cached,
+           let baseURL,
            let cachedHost = URL(string: cached.supabaseURL)?.host,
            let baseHost = baseURL.host,
            cachedHost != baseHost {
@@ -111,6 +117,20 @@ final class AppConfigStore: ObservableObject {
             let message = "Cached config host mismatch (cached=\(cachedHost), edge=\(baseHost)). Cache cleared."
             AppConfigCache.saveFailure(message)
             AppConfigLog.warn(message)
+        }
+
+        if !force, cached != nil, AppConfigCache.isFresh(maxAge: 12 * 60 * 60) {
+            return
+        }
+
+        guard let baseURL else {
+            if config == nil {
+                let message = "Missing edge base URL."
+                errorMessage = message
+                AppConfigCache.saveFailure(message)
+                AppConfigLog.error(message)
+            }
+            return
         }
 
         isLoading = true

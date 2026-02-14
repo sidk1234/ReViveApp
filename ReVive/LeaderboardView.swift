@@ -55,7 +55,7 @@ struct LeaderboardView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(24)
-                    .glassCard(cornerRadius: 26)
+                    .staticCard(cornerRadius: 26)
                     Spacer()
                 } else {
                     ScrollView {
@@ -110,7 +110,7 @@ private struct LeaderboardRow: View {
                 .foregroundStyle(AppTheme.mint)
         }
         .padding(16)
-        .glassCard(cornerRadius: 20)
+        .staticCard(cornerRadius: 20)
     }
 }
 
@@ -125,7 +125,7 @@ private struct LeaderboardAccountRow: View {
                 .foregroundStyle(.primary.opacity(0.8))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
-                .glassCard(cornerRadius: 20)
+                .staticCard(cornerRadius: 20)
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Sign in to appear on the leaderboard.")
@@ -154,7 +154,7 @@ private struct LeaderboardAccountRow: View {
                 .buttonStyle(.plain)
             }
             .padding(14)
-            .glassCard(cornerRadius: 20)
+            .staticCard(cornerRadius: 20)
         }
     }
 }

@@ -110,6 +110,7 @@ struct SupabaseUser: Equatable {
     let displayName: String?
     let preferences: UserPreferences?
     let authProviders: [String]
+    let avatarURL: String?
 }
 
 struct AppSettings: Decodable {
@@ -218,6 +219,7 @@ final class SupabaseService {
         case httpError(Int, String)
         case invalidCallback
         case missingConfig
+        case emailAlreadyRegistered
     }
 
     private let config: SupabaseConfig
@@ -238,6 +240,15 @@ final class SupabaseService {
 
     private struct SignUpResponse: Decodable {
         let session: TokenResponse?
+        let user: SignUpUser?
+    }
+
+    private struct SignUpUser: Decodable {
+        let identities: [SignUpIdentity]?
+    }
+
+    private struct SignUpIdentity: Decodable {
+        let provider: String?
     }
 
     init(config: SupabaseConfig) {
@@ -337,8 +348,25 @@ final class SupabaseService {
         }
 
         let decoded = try jsonDecoder.decode(SignUpResponse.self, from: data)
-        guard let session = decoded.session else { return nil }
-        return makeSession(from: session)
+        if let session = decoded.session {
+            return makeSession(from: session)
+        }
+        if let identities = decoded.user?.identities {
+            if identities.isEmpty {
+                // Supabase returns an empty identities array when the email is already registered.
+                throw ServiceError.emailAlreadyRegistered
+            }
+            if decoded.session == nil {
+                let hasNonEmailProvider = identities.contains { identity in
+                    guard let provider = identity.provider?.lowercased() else { return false }
+                    return provider != "email"
+                }
+                if hasNonEmailProvider {
+                    throw ServiceError.emailAlreadyRegistered
+                }
+            }
+        }
+        return nil
     }
 
     func sendPasswordReset(email: String) async throws {
@@ -464,6 +492,10 @@ final class SupabaseService {
             metadata?["full_name"] as? String ??
             metadata?["name"] as? String ??
             metadata?["preferred_username"] as? String
+        let avatarURL =
+            metadata?["avatar_url"] as? String ??
+            metadata?["picture"] as? String ??
+            metadata?["avatar"] as? String
         let preferences = UserPreferences.from(metadata: metadata)
         let authProviders = parseAuthProviders(appMetadata: appMetadata, identities: dict["identities"] as? [[String: Any]])
 
@@ -472,7 +504,8 @@ final class SupabaseService {
             email: email,
             displayName: displayName,
             preferences: preferences,
-            authProviders: authProviders
+            authProviders: authProviders,
+            avatarURL: avatarURL
         )
     }
 

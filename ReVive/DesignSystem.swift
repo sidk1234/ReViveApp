@@ -66,6 +66,20 @@ enum AppType {
 }
 
 extension View {
+    // NOTE: Static card background to avoid flashing when views recompose during scroll/toggle updates.
+    func staticCard(cornerRadius: CGFloat = 20) -> some View {
+        self
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(AppTheme.cardGradient)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            )
+            .transaction { $0.disablesAnimations = true }
+    }
+
     func glassCard(cornerRadius: CGFloat = 20, interactive: Bool = false) -> some View {
         self
             .background(

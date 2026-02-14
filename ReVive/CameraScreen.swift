@@ -92,20 +92,28 @@ private func analysisPrompt(location: LocationContext, itemDescription: String? 
         - If no prep is needed: write “No special prep.”
 
         RESPONSE FORMAT (STRICT)
-        Plain text only.
-        NO JSON.
+        JSON only.
         NO markdown.
         NO URLs.
         NO citations.
-        NO extra lines.
-        NO explanations outside required fields.
+        NO extra keys.
+        NO extra text before or after JSON.
 
-        OUTPUT FORMAT (EXACT — DO NOT MODIFY)
-        NOTES: <item-specific prep or “No special prep.”>
-        ITEM: <exact product name or concise generic name>
-        MATERIAL: <material>
-        RECYCLABLE: <yes/no>
-        BIN: <specific local bin or disposal instruction>
+        OUTPUT JSON SCHEMA (EXACT KEYS ONLY)
+        {
+          "notes": "<item-specific prep or 'No special prep.'>",
+          "item": "<exact product name or concise generic name>",
+          "material": "<material>",
+          "recyclable": true|false,
+          "bin": "<specific local bin or disposal instruction>"
+        }
+
+        OUTPUT GUARANTEE
+        You must always output a valid, non-empty JSON object matching the schema.
+        If you cannot determine a field, use:
+        - "unknown" for item/material/bin
+        - "No special prep." for notes
+        - false for recyclable
 
         FINAL BEHAVIOR REQUIREMENT
         The answer MUST be decisive, location-specific, and final.
@@ -196,6 +204,8 @@ struct CameraScreen: View {
     @State private var notesBarWidth: CGFloat = 0
     @FocusState private var zipFieldFocused: Bool
     @State private var isTextEntryActive: Bool = false
+    @State private var isTextRequestInFlight: Bool = false
+    @State private var isHidingResult: Bool = false
     @State private var manualItemText: String = ""
     @FocusState private var manualTextFocused: Bool
     @Namespace private var shutterNamespace
@@ -205,6 +215,10 @@ struct CameraScreen: View {
     @State private var noItemOpacity: Double = 0
     @State private var isLocationEntryExpanded: Bool = true
     @State private var didToggleLocationEntry: Bool = false
+    @State private var showRecycleToast: Bool = false
+    @State private var showConfetti: Bool = false
+    @State private var zoomGestureStart: CGFloat = 1.0
+    @State private var isZooming: Bool = false
 
     private let sideSize: CGFloat = 70
     private let shutterSize: CGFloat = 85
@@ -217,6 +231,14 @@ struct CameraScreen: View {
     private var bottomControlsPadding: CGFloat {
         let extra = isTextEntryActive ? textEntryKeyboardSpacing : 0
         return bottomBarInset + extra
+    }
+
+    private var zoomLabel: String {
+        let value = camera.zoomFactor
+        if abs(value - 1.0) < 0.05 {
+            return "1x"
+        }
+        return String(format: "%.1fx", value)
     }
     
     private var hasOverlay: Bool {
@@ -265,28 +287,47 @@ struct CameraScreen: View {
     // MARK: - AI overlay
     @ViewBuilder private var aiOverlay: some View {
         if hasOverlay {
-            VStack(spacing: 16) {
-                if camera.aiIsLoading {
+            if camera.aiIsLoading {
+                VStack {
+                    Spacer()
                     loadingStatus
                         .transition(.opacity.combined(with: .scale))
-                } else if let err = camera.aiErrorText {
-                    errorCard(err)
-                } else if let result = camera.aiParsedResult {
-                    resultStatus
-                        .transition(.opacity.combined(with: .scale))
-
-                    notesBar(result.notes)
-                    if let notice = scoreNotice {
-                        scoreNoticeBar(notice)
-                    }
-                    infoCard(result)
+                    Spacer()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(true)
+            } else {
+                VStack(spacing: 16) {
+                    if let err = camera.aiErrorText {
+                        let closeAction = lastAnalysisSource == .text ? { clearAIResult() } : nil
+                        errorCard(err, onClose: closeAction)
+                    } else if let result = camera.aiParsedResult {
+                        if !isHidingResult {
+                            VStack(spacing: 16) {
+                                resultStatus
+                                    .transition(.opacity.combined(with: .scale))
+
+                                notesBar(result.notes)
+                                if let notice = scoreNotice {
+                                    scoreNoticeBar(notice)
+                                }
+                                infoCard(result)
+                                actionButtons(for: result)
+                            }
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .scale),
+                                removal: .opacity
+                            ))
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 0)
+                .padding(.top, 0)
+                .frame(maxHeight: .infinity, alignment: .center)
+                .allowsHitTesting(true)
             }
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(.top, 70)
-            .padding(.horizontal, 20)
-            .padding(.bottom, bottomBarInset + 160)
-            .allowsHitTesting(true)
         }
     }
 
@@ -354,19 +395,120 @@ struct CameraScreen: View {
         }
     }
 
-    private func errorCard(_ message: String) -> some View {
-        Text(message)
-            .font(AppType.body(13))
-            .foregroundStyle(.primary.opacity(0.95))
-            .multilineTextAlignment(.leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(maxWidth: 360, alignment: .leading)
+    private func errorCard(_ message: String, onClose: (() -> Void)? = nil) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(message)
+                .font(AppType.body(14))
+                .foregroundStyle(.primary.opacity(0.95))
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                UIPasteboard.general.string = message
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.8))
+                    .frame(width: 28, height: 28)
+                    .liquidGlassButton(in: RoundedRectangle(cornerRadius: 8, style: .continuous), interactive: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy error")
+            
+            if let onClose {
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.primary.opacity(0.9))
+                        .frame(width: 28, height: 28)
+                        .liquidGlassButton(in: RoundedRectangle(cornerRadius: 8, style: .continuous), interactive: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close error")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: 360, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .liquidGlassBackground(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func actionButtons(for result: AIRecyclingResult) -> some View {
+        let isRecyclable = result.recyclable
+        return VStack(spacing: 10) {
+            if isRecyclable {
+                Button {
+                    triggerRecycledCelebration()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16, weight: .bold))
+                        Text("I recycled it")
+                            .font(AppType.title(16))
+                    }
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 12)
+                    .background(
+                        Capsule().fill(Color(red: 0.2, green: 0.9, blue: 0.55))
+                    )
+                    .shadow(color: Color(red: 0.2, green: 0.9, blue: 0.55).opacity(0.7), radius: 10, x: 0, y: 6)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    animateResetToCapture()
+                } label: {
+                    Text("Done")
+                        .font(AppType.title(16))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule().fill(Color.white.opacity(0.08))
+                        )
+                        .overlay(
+                            Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var zoomPill: some View {
+        Text(zoomLabel)
+            .font(AppType.body(11))
+            .foregroundStyle(.primary.opacity(0.9))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                Capsule().fill(.ultraThinMaterial)
             )
-            .liquidGlassBackground(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1)
+            )
+    }
+
+    private var recycleToast: some View {
+        Text("Thanks for recycling")
+            .font(AppType.title(14))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                Capsule().fill(.ultraThinMaterial)
+            )
+            .overlay(
+                Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1)
+            )
+            .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private func notesBar(_ notes: String) -> some View {
@@ -535,6 +677,60 @@ struct CameraScreen: View {
         scoreNotice = nil
     }
 
+    private func resetToCapture() {
+        camera.glowImage = nil
+        camera.fillImage = nil
+        camera.isSelected = false
+        camera.startSession()
+        clearAIResult()
+        camera.aiIsLoading = false
+        camera.clearCapturedImage()
+        isHidingResult = false
+    }
+
+    private func resetToCaptureVisual(clearResult: Bool = true) {
+        camera.glowImage = nil
+        camera.fillImage = nil
+        camera.isSelected = false
+        if clearResult {
+            clearAIResult()
+        }
+        camera.aiIsLoading = false
+    }
+
+    private func animateResetToCapture() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+            isHidingResult = true
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                resetToCaptureVisual(clearResult: true)
+            }
+            camera.startSession()
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                camera.clearCapturedImage()
+            }
+            isHidingResult = false
+        }
+    }
+
+    private func triggerRecycledCelebration() {
+        showConfetti = true
+        showRecycleToast = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            showConfetti = false
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+                isHidingResult = true
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.45) {
+            showRecycleToast = false
+            animateResetToCapture()
+        }
+    }
+
     private func resolveLocationContext() -> (LocationContext, Bool) {
         let usableLocation = locationManager.usableLocation
         let hasLocation = usableLocation != nil
@@ -582,6 +778,7 @@ struct CameraScreen: View {
         guard !trimmed.isEmpty else { return }
         guard !camera.aiIsLoading else { return }
         lastAnalysisSource = .text
+        isTextRequestInFlight = true
         let (context, useWebSearch) = resolveLocationContext()
         zipFieldFocused = false
         manualTextFocused = false
@@ -595,15 +792,7 @@ struct CameraScreen: View {
             )
         } else {
             Task { @MainActor in
-                let quota = await auth.fetchGuestQuota()
-                guard let quota else {
-                    camera.aiErrorText = "Guest access unavailable. Please sign in."
-                    return
-                }
-                guard quota.remaining > 0 else {
-                    camera.aiErrorText = "Guest quota exceeded. Sign in to continue."
-                    return
-                }
+                _ = await auth.fetchGuestQuota()
                 camera.sendTextToOpenAI(
                     prompt: analysisPrompt(location: context, itemDescription: trimmed),
                     itemText: trimmed,
@@ -905,8 +1094,8 @@ struct CameraScreen: View {
                             .frame(width: geo.size.width, height: geo.size.height)
                             .clipped()
 
-                        // Phase 1: hollow outline glow (when not selected)
-                        if !camera.isSelected, let glow = camera.glowImage {
+                        // Phase 1: hollow outline glow (always on)
+                        if let glow = camera.glowImage {
                             Image(uiImage: glow)
                                 .resizable()
                                 .scaledToFill()
@@ -946,7 +1135,21 @@ struct CameraScreen: View {
                 }
                 .ignoresSafeArea()
             } else {
-                CameraPreview(session: camera.session)
+                let pinch = MagnificationGesture()
+                    .onChanged { value in
+                        if !isZooming {
+                            isZooming = true
+                            zoomGestureStart = camera.zoomFactor
+                        }
+                        let newFactor = zoomGestureStart * value
+                        camera.setZoomFactor(newFactor)
+                    }
+                    .onEnded { _ in
+                        isZooming = false
+                    }
+
+                CameraPreview(session: camera.session, videoOrientation: camera.videoOrientation)
+                    .gesture(pinch)
                     .ignoresSafeArea()
             }
 
@@ -960,6 +1163,7 @@ struct CameraScreen: View {
                 Spacer()
             }
             .ignoresSafeArea()
+            .allowsHitTesting(false)
 
             VStack {
                 Spacer()
@@ -971,6 +1175,7 @@ struct CameraScreen: View {
                 .frame(height: 240)
             }
             .ignoresSafeArea()
+            .allowsHitTesting(false)
 
             if let cameraError = camera.cameraErrorText {
                 VStack(spacing: 16) {
@@ -987,13 +1192,7 @@ struct CameraScreen: View {
                 HStack {
                     if camera.capturedImage != nil {
                         Button {
-                            camera.capturedImage = nil
-                            camera.glowImage = nil
-                            camera.fillImage = nil
-                            camera.isSelected = false
-                            camera.startSession()
-                            clearAIResult()
-                            camera.aiIsLoading = false
+                            animateResetToCapture()
                         } label: {
                             Image(systemName: "xmark")
                                 .foregroundStyle(.primary)
@@ -1006,7 +1205,7 @@ struct CameraScreen: View {
 
                     Spacer()
 
-                    locationToggleButton
+                    // location toggle removed; manage location in settings
                 }
                 .padding(.leading, 24)
                 .padding(.trailing, 24)
@@ -1019,38 +1218,63 @@ struct CameraScreen: View {
             // MARK: - AI overlay (always available)
             aiOverlay
 
+            if showConfetti {
+                ConfettiView()
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
+
+            if showRecycleToast {
+                VStack {
+                    recycleToast
+                    Spacer()
+                }
+                .padding(.top, 56)
+                .frame(maxWidth: .infinity)
+            }
+
             // MARK: - Bottom controls
             VStack {
                 Spacer()
 
                 if camera.capturedImage == nil {
+                    let hideTextControls = lastAnalysisSource == .text && (isTextRequestInFlight || hasOverlay)
 
-                    VStack(spacing: 12) {
-                        if auth.showCaptureInstructions {
-                            captureInstructionBar
-                                .frame(maxWidth: 360)
-                        }
-
-                        if shouldShowLocationEntry {
-                            zipControlsRow
-                            locationStatus
-                                .transition(.opacity)
-                        }
-
-                        if !zipFieldFocused {
-                            Group {
-                                if #available(iOS 26.0, *) {
-                                    GlassEffectContainer(spacing: 18) {
-                                        captureControlsRow
-                                    }
+                    if !hideTextControls {
+                        VStack(spacing: 12) {
+                            if isTextEntryActive {
+                                captureControlsRow
+                            } else {
+                                if auth.showCaptureInstructions {
+                                    zoomPill
+                                    captureInstructionBar
+                                        .frame(maxWidth: 360)
                                 } else {
-                                    captureControlsRow
+                                    zoomPill
+                                }
+
+                                if shouldShowLocationEntry {
+                                    zipControlsRow
+                                    locationStatus
+                                        .transition(.opacity)
+                                }
+
+                                if !zipFieldFocused {
+                                    Group {
+                                        if #available(iOS 26.0, *) {
+                                            GlassEffectContainer(spacing: 18) {
+                                                captureControlsRow
+                                            }
+                                        } else {
+                                            captureControlsRow
+                                        }
+                                    }
                                 }
                             }
                         }
+                        // Bottom padding adjustment for safety
+                        .padding(.bottom, bottomControlsPadding)
                     }
-                    // Bottom padding adjustment for safety
-                    .padding(.bottom, bottomControlsPadding)
 
                 } else {
                     let enabled = camera.isSelected
@@ -1075,37 +1299,66 @@ struct CameraScreen: View {
                                 .transition(.opacity)
                         }
 
-                        Button {
-                            guard enabled else { return }
-                            let (context, useWebSearch) = resolveLocationContext()
-                            zipFieldFocused = false
-                            manualTextFocused = false
-                            lastAnalysisSource = .photo
-                            let accessToken = auth.session?.accessToken
-                            camera.sendSelectionToOpenAI(
-                                prompt: analysisPrompt(location: context),
-                                useWebSearch: useWebSearch,
-                                accessToken: accessToken
-                            )
+                        if !hasOverlay {
+                            Button {
+                                guard enabled else { return }
+                                let (context, useWebSearch) = resolveLocationContext()
+                                zipFieldFocused = false
+                                manualTextFocused = false
+                                lastAnalysisSource = .photo
+                                let accessToken = auth.session?.accessToken
+                                camera.sendSelectionToOpenAI(
+                                    prompt: analysisPrompt(location: context),
+                                    useWebSearch: useWebSearch,
+                                    accessToken: accessToken
+                                )
 
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 14, weight: .bold))
-                                Text("Analyze selection")
-                                    .font(AppType.title(16))
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 14, weight: .bold))
+                                    Text("Analyze selection")
+                                        .font(AppType.title(16))
+                                }
+                                .foregroundStyle(AppTheme.accentGradient)
+                                .frame(width: 240, height: 60)
+                                .liquidGlassButton(
+                                    in: RoundedRectangle(cornerRadius: 22, style: .continuous),
+                                    interactive: true
+                                )
                             }
-                            .foregroundStyle(AppTheme.accentGradient)
-                            .frame(width: 240, height: 60)
-                            .liquidGlassButton(
-                                in: RoundedRectangle(cornerRadius: 22, style: .continuous),
-                                interactive: true
-                            )
+                            .buttonStyle(.plain)
+                            .disabled(!enabled)
+                            .grayscale(enabled ? 0.0 : 1.0)
+                            .opacity(enabled ? 1.0 : 0.55)
+                        } else if camera.aiErrorText != nil {
+                            Button {
+                                let (context, useWebSearch) = resolveLocationContext()
+                                zipFieldFocused = false
+                                manualTextFocused = false
+                                lastAnalysisSource = .photo
+                                let accessToken = auth.session?.accessToken
+                                camera.sendSelectionToOpenAI(
+                                    prompt: analysisPrompt(location: context),
+                                    useWebSearch: useWebSearch,
+                                    accessToken: accessToken
+                                )
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 14, weight: .bold))
+                                    Text("Retry")
+                                        .font(AppType.title(16))
+                                }
+                                .foregroundStyle(AppTheme.accentGradient)
+                                .frame(width: 240, height: 60)
+                                .liquidGlassButton(
+                                    in: RoundedRectangle(cornerRadius: 22, style: .continuous),
+                                    interactive: true
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!enabled)
-                        .grayscale(enabled ? 0.0 : 1.0)
-                        .opacity(enabled ? 1.0 : 0.55)
                     }
                     .padding(.bottom, bottomControlsPadding)
                 }
@@ -1161,6 +1414,16 @@ struct CameraScreen: View {
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.9), value: shouldShowLocationEntry)
         // Overlay logic - fixed animation
+        .onChange(of: camera.aiIsLoading) { _, newValue in
+            if newValue {
+                isTextRequestInFlight = false
+            }
+        }
+        .onChange(of: camera.aiErrorText) { _, newValue in
+            if newValue != nil {
+                isTextRequestInFlight = false
+            }
+        }
         .onChange(of: camera.noItemDetected) { _, newValue in
             guard newValue else { return }
             clearAIResult()
@@ -1186,6 +1449,12 @@ struct CameraScreen: View {
             }
         }
         .onChange(of: camera.aiParsedResult) { _, newValue in
+            if newValue != nil {
+                isHidingResult = false
+            }
+            if newValue != nil {
+                isTextRequestInFlight = false
+            }
             guard let result = newValue, let raw = camera.aiResultText else { return }
             guard lastSavedJSON != raw else { return }
             let previewImage = lastAnalysisSource == .photo ? camera.previewImageForHistory() : nil
@@ -1210,6 +1479,87 @@ struct CameraScreen: View {
                 auth.refreshGuestQuota()
             }
         }
+        .onAppear {
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            camera.updateOrientation()
+        }
+        .onDisappear {
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            camera.updateOrientation()
+        }
+    }
+}
+
+private struct ConfettiView: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = ConfettiEmitterView()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+
+        let colors: [UIColor] = [
+            UIColor(red: 0.2, green: 0.9, blue: 0.55, alpha: 1.0),
+            UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1.0),
+            UIColor(red: 0.95, green: 0.78, blue: 0.2, alpha: 1.0),
+            UIColor(red: 0.95, green: 0.35, blue: 0.45, alpha: 1.0)
+        ]
+
+        view.emitter.emitterCells = colors.map { color in
+            let cell = CAEmitterCell()
+            cell.birthRate = 60
+            cell.lifetime = 3.6
+            cell.velocity = 320
+            cell.velocityRange = 200
+            cell.emissionLongitude = .pi
+            cell.emissionRange = .pi / 1.8
+            cell.spin = 6
+            cell.spinRange = 8
+            cell.scale = 0.035
+            cell.scaleRange = 0.06
+            cell.color = color.cgColor
+            cell.contents = makeConfettiImage(color: color).cgImage
+            return cell
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    private func makeConfettiImage(color: UIColor) -> UIImage {
+        let size = CGSize(width: 16, height: 10)
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        let ctx = UIGraphicsGetCurrentContext()
+        ctx?.setFillColor(color.cgColor)
+        ctx?.fill(CGRect(origin: .zero, size: size))
+        let image = UIGraphicsGetImageFromCurrentImageContext() ?? UIImage()
+        UIGraphicsEndImageContext()
+        return image
+    }
+}
+
+private final class ConfettiEmitterView: UIView {
+    let emitter = CAEmitterLayer()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        emitter.emitterShape = .line
+        emitter.renderMode = .additive
+        layer.addSublayer(emitter)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        emitter.emitterShape = .line
+        emitter.renderMode = .additive
+        layer.addSublayer(emitter)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        emitter.frame = bounds
+        emitter.emitterPosition = CGPoint(x: bounds.midX, y: -10)
+        emitter.emitterSize = CGSize(width: bounds.width, height: 1)
     }
 }
 
