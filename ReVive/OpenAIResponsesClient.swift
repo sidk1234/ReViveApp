@@ -27,6 +27,7 @@ final class OpenAIResponsesClient {
         let contextImage: String?
         let maxOutputTokens: Int?
         let useWebSearch: Bool?
+        let deviceId: String?
     }
 
     struct ProxyResponse: Decodable {
@@ -74,7 +75,8 @@ final class OpenAIResponsesClient {
             image: dataURL,
             contextImage: contextDataURL,
             maxOutputTokens: maxOutputTokens,
-            useWebSearch: useWebSearch
+            useWebSearch: useWebSearch,
+            deviceId: DeviceIDStore.current
         )
 
         var request = URLRequest(url: url)
@@ -125,7 +127,8 @@ final class OpenAIResponsesClient {
             image: nil,
             contextImage: nil,
             maxOutputTokens: maxOutputTokens,
-            useWebSearch: useWebSearch
+            useWebSearch: useWebSearch,
+            deviceId: DeviceIDStore.current
         )
 
         var request = URLRequest(url: url)
@@ -168,6 +171,7 @@ private func applyAuthHeaders(_ request: inout URLRequest, accessToken: String?,
     if let anonKey, !anonKey.isEmpty {
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
     }
+    request.setValue(DeviceIDStore.current, forHTTPHeaderField: "x-revive-device-id")
 }
 
 private func notifyGuestQuotaIfNeeded(_ response: HTTPURLResponse) {

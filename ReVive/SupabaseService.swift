@@ -245,6 +245,12 @@ final class SupabaseService {
 
     private struct SignUpUser: Decodable {
         let identities: [SignUpIdentity]?
+        let emailConfirmedAt: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case identities
+            case emailConfirmedAt = "email_confirmed_at"
+        }
     }
 
     private struct SignUpIdentity: Decodable {
@@ -366,6 +372,9 @@ final class SupabaseService {
                 }
             }
         }
+        if decoded.session == nil, decoded.user?.emailConfirmedAt != nil {
+            throw ServiceError.emailAlreadyRegistered
+        }
         return nil
     }
 
@@ -391,10 +400,16 @@ final class SupabaseService {
 
     func fetchGuestQuota() async throws -> GuestQuota {
         let url = config.url.appendingPathComponent("functions/v1/anon-quota")
-        var request = URLRequest(url: url)
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "device_id", value: DeviceIDStore.current)
+        ]
+        guard let requestURL = components?.url else { throw ServiceError.invalidCallback }
+        var request = URLRequest(url: requestURL)
         request.httpMethod = "GET"
         request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(config.anonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(DeviceIDStore.current, forHTTPHeaderField: "x-revive-device-id")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
@@ -532,6 +547,12 @@ final class SupabaseService {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         try await updateUserMetadata(["full_name": trimmed], accessToken: accessToken)
+    }
+
+    func updateUserAvatarURL(_ url: String, accessToken: String) async throws {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try await updateUserMetadata(["avatar_url": trimmed], accessToken: accessToken)
     }
 
     private func updateUserMetadata(_ metadata: [String: Any], accessToken: String) async throws {
@@ -939,6 +960,31 @@ final class SupabaseService {
         guard (200...299).contains(http.statusCode) else {
             throw ServiceError.httpError(http.statusCode, "Image upload failed")
         }
+    }
+
+    func uploadProfilePhoto(data: Data, path: String, accessToken: String) async throws -> String {
+        let bucket = "profile-photos"
+        let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        let uploadURL = config.url.appendingPathComponent("storage/v1/object/\(bucket)/\(encodedPath)")
+
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("true", forHTTPHeaderField: "x-upsert")
+        request.httpBody = data
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            throw ServiceError.httpError(http.statusCode, "Profile photo upload failed")
+        }
+
+        let publicURL = config.url
+            .appendingPathComponent("storage/v1/object/public/\(bucket)/\(encodedPath)")
+            .absoluteString
+        return publicURL
     }
 
     private func parseQueryItems(_ raw: String) -> [String: String] {

@@ -119,14 +119,7 @@ private struct LeaderboardAccountRow: View {
     @EnvironmentObject private var auth: AuthStore
 
     var body: some View {
-        if auth.isSignedIn {
-            Text("Signed in as \(auth.user?.displayName ?? auth.user?.email ?? "Recycler")")
-                .font(AppType.body(13))
-                .foregroundStyle(.primary.opacity(0.8))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .staticCard(cornerRadius: 20)
-        } else {
+        if !auth.isSignedIn {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Sign in to appear on the leaderboard.")
                     .font(AppType.body(13))
@@ -148,7 +141,7 @@ private struct LeaderboardAccountRow: View {
                     .padding(.horizontal, 12)
                     .liquidGlassButton(
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous),
-                        tint: Color.white.opacity(0.7)
+                        tint: AppTheme.mint
                     )
                 }
                 .buttonStyle(.plain)

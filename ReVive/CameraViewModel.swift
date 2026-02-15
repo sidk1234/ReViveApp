@@ -57,7 +57,6 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
     // Keep the selected mask + captured CI for export (aligned to photo extent)
     private var capturedCI: CIImage?
-    @Published var videoOrientation: AVCaptureVideoOrientation = .portrait
 
     override init() {
         super.init()
@@ -121,33 +120,6 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         session.commitConfiguration()
         isConfigured = true
         clearCameraError()
-        updateOrientation()
-    }
-
-    @MainActor
-    func updateOrientation() {
-        let deviceOrientation = UIDevice.current.orientation
-        let newOrientation = mapDeviceOrientation(deviceOrientation)
-        videoOrientation = newOrientation
-
-        sessionQueue.async {
-            if let connection = self.output.connection(with: .video) {
-                connection.videoOrientation = newOrientation
-            }
-        }
-    }
-
-    private func mapDeviceOrientation(_ orientation: UIDeviceOrientation) -> AVCaptureVideoOrientation {
-        switch orientation {
-        case .landscapeLeft:
-            return .landscapeRight
-        case .landscapeRight:
-            return .landscapeLeft
-        case .portraitUpsideDown:
-            return .portraitUpsideDown
-        default:
-            return .portrait
-        }
     }
 
     func setZoomFactor(_ factor: CGFloat) {
@@ -487,17 +459,15 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         self.noItemDetected = false
 
         DispatchQueue.main.async {
-            self.capturedImage = fixed
             self.isSelected = false
             self.glowImage = nil
             self.fillImage = nil
             self.instanceMasks = []
             self.selectedInstanceIndex = nil
             self.selectedMaskCI = nil
-            self.stopSession()
         }
 
-        buildOverlays(from: cg, uiImage: fixed, dismissCaptureOnNoItems: false)
+        buildOverlays(from: cg, uiImage: fixed, dismissCaptureOnNoItems: true)
     }
 
 
@@ -565,11 +535,15 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             self.glowImage = nil
             self.fillImage = nil
             self.isSelected = false
-            self.noItemDetected = true
+            // Retrigger the no-item signal reliably, even on back-to-back attempts.
+            self.noItemDetected = false
             if dismissCaptureOnNoItems {
                 self.capturedImage = nil
                 self.capturedCI = nil
                 self.startSession()
+            }
+            DispatchQueue.main.async {
+                self.noItemDetected = true
             }
         }
     }

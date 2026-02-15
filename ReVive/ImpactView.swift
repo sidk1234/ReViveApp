@@ -9,78 +9,121 @@ import UIKit
 struct ImpactView: View {
     var onGoToAccount: () -> Void = {}
     @EnvironmentObject private var history: HistoryStore
+    @EnvironmentObject private var auth: AuthStore
     @State private var selectedEntry: HistoryEntry?
     @State private var headerHeight: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let scoredEntries = history.entries.filter { $0.source == .photo }
-        let totalScans = scoredEntries.reduce(0) { $0 + $1.scanCount }
-        let recyclableCount = scoredEntries.filter { $0.recyclable }.count
-        let impactScore = recyclableCount
+        let totalScans = history.entries.reduce(0) { $0 + $1.scanCount }
+        let recyclableCount = history.entries.filter { $0.recyclable }.count
+        let totalPoints = history.entries.filter { $0.source == .photo && $0.recyclable }.count
 
         ZStack(alignment: .top) {
             AppTheme.backgroundGradient(colorScheme)
                 .ignoresSafeArea()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if history.entries.isEmpty {
-                        VStack(spacing: 14) {
-                            Image(systemName: "clock.badge.checkmark")
-                                .font(.system(size: 40, weight: .bold))
-                                .foregroundStyle(AppTheme.accentGradient)
+            if !auth.isSignedIn {
+                VStack(spacing: 14) {
+                    Image(systemName: "person.crop.circle.badge.exclamationmark")
+                        .font(.system(size: 42, weight: .bold))
+                        .foregroundStyle(AppTheme.accentGradient)
 
-                            Text("No impact yet")
-                                .font(AppType.title(18))
-                                .foregroundStyle(.primary)
+                    Text("Log in to track your impact")
+                        .font(AppType.title(20))
+                        .foregroundStyle(.primary)
 
-                            Text("Scan an item from the camera tab and it will appear here.")
-                                .font(AppType.body(14))
-                                .foregroundStyle(.primary.opacity(0.7))
-                                .multilineTextAlignment(.center)
+                    Text("Create an account or sign in to see your scans, impact totals, and leaderboard.")
+                        .font(AppType.body(14))
+                        .foregroundStyle(.primary.opacity(0.7))
+                        .multilineTextAlignment(.center)
+
+                    Button {
+                        onGoToAccount()
+                    } label: {
+                        HStack {
+                            Text("Go to Account")
+                                .font(AppType.title(15))
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .bold))
                         }
+                        .foregroundStyle(.black)
                         .frame(maxWidth: .infinity)
-                        .padding(24)
-                        .staticCard(cornerRadius: 26)
-                    } else {
-                        LazyVStack(spacing: 14) {
-                            ForEach(history.entries) { entry in
-                                ImpactCard(entry: entry) {
-                                    selectedEntry = entry
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                        .liquidGlassButton(
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous),
+                            tint: AppTheme.mint
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .frame(maxWidth: 420)
+                .padding(24)
+                .staticCard(cornerRadius: 26)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .padding(.horizontal, 28)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if history.entries.isEmpty {
+                            VStack(spacing: 14) {
+                                Image(systemName: "clock.badge.checkmark")
+                                    .font(.system(size: 40, weight: .bold))
+                                    .foregroundStyle(AppTheme.accentGradient)
+
+                                Text("No impact yet")
+                                    .font(AppType.title(18))
+                                    .foregroundStyle(.primary)
+
+                                Text("Scan an item from the camera tab and it will appear here.")
+                                    .font(AppType.body(14))
+                                    .foregroundStyle(.primary.opacity(0.7))
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(24)
+                            .staticCard(cornerRadius: 26)
+                        } else {
+                            LazyVStack(spacing: 14) {
+                                ForEach(history.entries) { entry in
+                                    ImpactCard(entry: entry) {
+                                        selectedEntry = entry
+                                    }
                                 }
                             }
+                            .padding(.top, 4)
                         }
-                        .padding(.top, 4)
                     }
+                    .padding(.horizontal, 28)
+                    .padding(.top, headerHeight + 8)
+                    .padding(.bottom, 120)
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, headerHeight + 8)
-                .padding(.bottom, 120)
-            }
-            .ignoresSafeArea(.container, edges: .bottom)
+                .ignoresSafeArea(.container, edges: .bottom)
 
-            ImpactHeader(
-                totalScans: totalScans,
-                recyclableCount: recyclableCount,
-                impactScore: impactScore,
-                onGoToAccount: onGoToAccount
-            )
-            .padding(.horizontal, 28)
-            .padding(.top, 28)
-            .padding(.bottom, 12)
-            .background(
-                ImpactHeaderGlass()
-                    .padding(.top, -28)
-                    .ignoresSafeArea(edges: .top)
-            )
-            .background(
-                GeometryReader { proxy in
-                    Color.clear
-                        .preference(key: ImpactHeaderHeightKey.self, value: proxy.size.height)
-                }
-            )
-            .zIndex(1)
+                ImpactHeader(
+                    totalScans: totalScans,
+                    recyclableCount: recyclableCount,
+                    totalPoints: totalPoints,
+                    onGoToAccount: onGoToAccount
+                )
+                .padding(.horizontal, 28)
+                .padding(.top, 28)
+                .padding(.bottom, 12)
+                .background(
+                    ImpactHeaderGlass()
+                        .padding(.top, -28)
+                        .ignoresSafeArea(edges: .top)
+                )
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(key: ImpactHeaderHeightKey.self, value: proxy.size.height)
+                    }
+                )
+                .zIndex(1)
+            }
         }
         .onPreferenceChange(ImpactHeaderHeightKey.self) { height in
             if headerHeight != height {
@@ -96,7 +139,7 @@ struct ImpactView: View {
 private struct ImpactHeader: View {
     let totalScans: Int
     let recyclableCount: Int
-    let impactScore: Int
+    let totalPoints: Int
     let onGoToAccount: () -> Void
 
     var body: some View {
@@ -105,20 +148,11 @@ private struct ImpactHeader: View {
                 .font(AppType.display(30))
                 .foregroundStyle(.primary)
 
-            Text("Track your scans, see your impact, and sync your progress.")
-                .font(AppType.body(16))
-                .foregroundStyle(.primary.opacity(0.7))
-                .fixedSize(horizontal: false, vertical: true)
-
             ImpactStatsRow(
                 totalScans: totalScans,
                 recyclableCount: recyclableCount,
-                impactScore: impactScore
+                totalPoints: totalPoints
             )
-
-            Text("Recyclable counts items marked recyclable. Impact equals recyclable scans (1 point each).")
-                .font(AppType.body(12))
-                .foregroundStyle(.primary.opacity(0.65))
 
             ImpactAccountRow(onGoToAccount: onGoToAccount)
         }
@@ -259,13 +293,13 @@ private func formatDate(_ date: Date) -> String {
 private struct ImpactStatsRow: View {
     let totalScans: Int
     let recyclableCount: Int
-    let impactScore: Int
+    let totalPoints: Int
 
     var body: some View {
         HStack(spacing: 12) {
-            ImpactStatCard(title: "Scans", value: "\(totalScans)")
+            ImpactStatCard(title: "Total", value: "\(totalScans)")
             ImpactStatCard(title: "Recyclable", value: "\(recyclableCount)")
-            ImpactStatCard(title: "Impact", value: "\(impactScore)")
+            ImpactStatCard(title: "Impact", value: "\(totalPoints)")
         }
     }
 }
@@ -295,14 +329,7 @@ private struct ImpactAccountRow: View {
     @EnvironmentObject private var auth: AuthStore
 
     var body: some View {
-        if auth.isSignedIn {
-            Text("Signed in as \(auth.user?.displayName ?? auth.user?.email ?? "Recycler")")
-                .font(AppType.body(13))
-                .foregroundStyle(.primary.opacity(0.8))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .softGlassCard(cornerRadius: 20)
-        } else {
+        if !auth.isSignedIn {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Sign in to sync your impact and score.")
                     .font(AppType.body(13))
@@ -324,7 +351,7 @@ private struct ImpactAccountRow: View {
                     .padding(.horizontal, 12)
                     .liquidGlassButton(
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous),
-                        tint: Color.white.opacity(0.7)
+                        tint: AppTheme.mint
                     )
                 }
                 .buttonStyle(.plain)

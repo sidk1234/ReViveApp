@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EB21A35C2F40F30200E0AB78 /* SwiftyCrop in Frameworks */ = {isa = PBXBuildFile; productRef = EB21A35B2F40F30200E0AB78 /* SwiftyCrop */; };
 		EB298EF32F26F1AF0046DD33 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = EB298EF22F26F1AF0046DD33 /* GoogleSignIn */; };
 		EB298EF52F26F1AF0046DD33 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EB298EF42F26F1AF0046DD33 /* GoogleSignInSwift */; };
 /* End PBXBuildFile section */
@@ -43,6 +44,7 @@
 			files = (
 				EB298EF32F26F1AF0046DD33 /* GoogleSignIn in Frameworks */,
 				EB298EF52F26F1AF0046DD33 /* GoogleSignInSwift in Frameworks */,
+				EB21A35C2F40F30200E0AB78 /* SwiftyCrop in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -87,6 +89,7 @@
 			packageProductDependencies = (
 				EB298EF22F26F1AF0046DD33 /* GoogleSignIn */,
 				EB298EF42F26F1AF0046DD33 /* GoogleSignInSwift */,
+				EB21A35B2F40F30200E0AB78 /* SwiftyCrop */,
 			);
 			productName = Recyclability;
 			productReference = EB17A44A2F2585A8000F28E1 /* ReVive.app */;
@@ -118,6 +121,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				EB298EBD2F26E6670046DD33 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				EB21A35A2F40F30200E0AB78 /* XCRemoteSwiftPackageReference "SwiftyCrop" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EB17A44B2F2585A8000F28E1 /* Products */;
@@ -369,6 +373,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		EB21A35A2F40F30200E0AB78 /* XCRemoteSwiftPackageReference "SwiftyCrop" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/benedom/SwiftyCrop";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.1.0;
+			};
+		};
 		EB298EBD2F26E6670046DD33 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
@@ -380,6 +392,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		EB21A35B2F40F30200E0AB78 /* SwiftyCrop */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EB21A35A2F40F30200E0AB78 /* XCRemoteSwiftPackageReference "SwiftyCrop" */;
+			productName = SwiftyCrop;
+		};
 		EB298EF22F26F1AF0046DD33 /* GoogleSignIn */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = EB298EBD2F26E6670046DD33 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;

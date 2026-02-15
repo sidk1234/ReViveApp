@@ -183,6 +183,61 @@ final class HistoryStore: ObservableObject {
         entries[index].remoteImagePath = path
     }
 
+    func mergeRemoteImpact(_ rows: [ImpactEntryRow]) {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        var merged: [String: HistoryEntry] = [:]
+        for entry in entries {
+            let key = "\(ImpactKey.dayKey(for: entry.date))|\(ImpactKey.itemKey(item: entry.item, material: entry.material, bin: entry.bin))"
+            merged[key] = entry
+        }
+
+        for row in rows {
+            let date = formatter.date(from: row.scannedAt) ?? Date()
+            let sourceRaw = (row.source ?? "").lowercased()
+            let source: HistorySource = sourceRaw == "text" ? .text : .photo
+            let scanCount = max(1, row.scanCount ?? 1)
+            let key = "\(row.dayKey)|\(row.itemKey)"
+
+            if let existing = merged[key] {
+                let updated = HistoryEntry(
+                    id: existing.id,
+                    date: date,
+                    item: row.item,
+                    material: row.material,
+                    recyclable: row.recyclable,
+                    bin: row.bin,
+                    notes: row.notes,
+                    rawJSON: existing.rawJSON.isEmpty ? "{}" : existing.rawJSON,
+                    source: source,
+                    localImagePath: existing.localImagePath,
+                    remoteImagePath: row.imagePath ?? existing.remoteImagePath,
+                    scanCount: scanCount
+                )
+                merged[key] = updated
+            } else {
+                let entry = HistoryEntry(
+                    id: UUID(),
+                    date: date,
+                    item: row.item,
+                    material: row.material,
+                    recyclable: row.recyclable,
+                    bin: row.bin,
+                    notes: row.notes,
+                    rawJSON: "{}",
+                    source: source,
+                    localImagePath: nil,
+                    remoteImagePath: row.imagePath,
+                    scanCount: scanCount
+                )
+                merged[key] = entry
+            }
+        }
+
+        entries = merged.values.sorted { $0.date > $1.date }
+    }
+
     private func load() {
         if let data = try? Data(contentsOf: storageURL()),
            let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {

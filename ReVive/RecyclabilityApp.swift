@@ -1,6 +1,6 @@
 //
-//  RecyclabilityApp.swift
-//  Recyclability
+//  ReViveApp.swift
+//  ReVive
 //
 //  Created by Sidharth Kumar on 1/24/26.
 //
@@ -10,7 +10,7 @@ import GoogleSignIn
 import Combine
 
 @main
-struct RecyclabilityApp: App {
+struct ReViveApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var historyStore = HistoryStore()
     @StateObject private var authStore = AuthStore()

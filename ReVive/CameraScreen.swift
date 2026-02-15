@@ -251,6 +251,18 @@ struct CameraScreen: View {
         return (auth.guestQuota?.remaining ?? 0) <= 0
     }
 
+    private var guestBannerVisible: Bool {
+        !auth.isSignedIn && auth.guestQuota != nil
+    }
+
+    private var topControlsTopPadding: CGFloat {
+        guestBannerVisible ? 154 : 60
+    }
+
+    private var captureControlsDisabled: Bool {
+        guestQuotaExhausted
+    }
+
     private var hasLocationAccess: Bool {
         switch locationManager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
@@ -453,9 +465,9 @@ struct CameraScreen: View {
                     triggerRecycledCelebration()
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
+                        Image(systemName: "plus")
                             .font(.system(size: 16, weight: .bold))
-                        Text("I recycled it")
+                        Text("Mark as Recycled")
                             .font(AppType.title(16))
                     }
                     .foregroundStyle(Color.white)
@@ -1138,7 +1150,7 @@ struct CameraScreen: View {
             // MARK: - Preview or captured image
             if let image = camera.capturedImage {
                 GeometryReader { geo in
-                    let selectionEnabled = !hasOverlay && !zipFieldFocused
+                    let selectionEnabled = !hasOverlay && !captureControlsDisabled
                     ZStack {
                         Image(uiImage: image)
                             .resizable()
@@ -1200,8 +1212,9 @@ struct CameraScreen: View {
                         isZooming = false
                     }
 
-                CameraPreview(session: camera.session, videoOrientation: camera.videoOrientation)
+                CameraPreview(session: camera.session)
                     .gesture(pinch)
+                    .allowsHitTesting(!captureControlsDisabled)
                     .ignoresSafeArea()
             }
 
@@ -1261,14 +1274,18 @@ struct CameraScreen: View {
                 }
                 .padding(.leading, 24)
                 .padding(.trailing, 24)
-                .padding(.top, 60)
+                .padding(.top, topControlsTopPadding)
+                .animation(.spring(response: 0.35, dampingFraction: 0.9), value: guestBannerVisible)
+                .disabled(captureControlsDisabled)
 
                 Spacer()
             }
             .ignoresSafeArea()
+            .zIndex(100)
 
             // MARK: - AI overlay (always available)
             aiOverlay
+                .allowsHitTesting(!captureControlsDisabled)
 
             if showConfetti {
                 ConfettiView()
@@ -1308,22 +1325,13 @@ struct CameraScreen: View {
                                 } else {
                                     zoomPill
                                 }
-
-                                if shouldShowLocationEntry {
-                                    zipControlsRow
-                                    locationStatus
-                                        .transition(.opacity)
-                                }
-
-                                if !zipFieldFocused {
-                                    Group {
-                                        if #available(iOS 26.0, *) {
-                                            GlassEffectContainer(spacing: 18) {
-                                                captureControlsRow
-                                            }
-                                        } else {
+                                Group {
+                                    if #available(iOS 26.0, *) {
+                                        GlassEffectContainer(spacing: 18) {
                                             captureControlsRow
                                         }
+                                    } else {
+                                        captureControlsRow
                                     }
                                 }
                             }
@@ -1346,12 +1354,6 @@ struct CameraScreen: View {
                                 .overlay(
                                     Capsule().stroke(Color.primary.opacity(0.2), lineWidth: 1)
                                 )
-                                .transition(.opacity)
-                        }
-
-                        if shouldShowLocationEntry {
-                            zipControlsRow
-                            locationStatus
                                 .transition(.opacity)
                         }
 
@@ -1427,6 +1429,7 @@ struct CameraScreen: View {
                     .padding(.bottom, bottomControlsPadding)
                 }
             }
+            .disabled(captureControlsDisabled)
             
             // "No Object Found" overlay must be last to sit on top of everything
             if showNoItemMessage {
@@ -1437,6 +1440,7 @@ struct CameraScreen: View {
         .onAppear {
             pulse = !auth.reduceMotionEnabled
             camera.hapticsEnabled = auth.enableHaptics
+            showGuestQuotaLock = guestQuotaExhausted
             updateLocationEntryVisibility()
             applyDefaultZipIfNeeded()
             locationManager.refreshLocationIfAuthorized()
@@ -1496,8 +1500,11 @@ struct CameraScreen: View {
             }
         }
         .onChange(of: auth.guestQuota) { _, newValue in
-            if let newValue, !auth.isSignedIn, newValue.remaining <= 0 {
-                showGuestQuotaLock = true
+            guard !auth.isSignedIn else { return }
+            if let newValue {
+                showGuestQuotaLock = newValue.remaining <= 0
+            } else {
+                showGuestQuotaLock = false
             }
         }
         .onChange(of: auth.isSignedIn) { _, newValue in
@@ -1544,7 +1551,7 @@ struct CameraScreen: View {
                 if auth.autoSyncImpactEnabled {
                     auth.submitImpact(entry: entry, history: history)
                 }
-                if entry.source == .text {
+                if entry.source == .text && entry.recyclable {
                     scoreNotice = "Thanks for recycling - text entries won't add to your score."
                 } else {
                     scoreNotice = nil
@@ -1553,22 +1560,16 @@ struct CameraScreen: View {
                 if auth.autoSyncImpactEnabled {
                     auth.submitImpact(entry: entry, history: history)
                 }
-                scoreNotice = "Thanks for recycling - this won't add to your score."
+                if entry.recyclable {
+                    scoreNotice = "Thanks for recycling - this won't add to your score."
+                } else {
+                    scoreNotice = nil
+                }
             }
             lastSavedJSON = raw
             if !auth.isSignedIn {
                 auth.refreshGuestQuota()
             }
-        }
-        .onAppear {
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            camera.updateOrientation()
-        }
-        .onDisappear {
-            UIDevice.current.endGeneratingDeviceOrientationNotifications()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            camera.updateOrientation()
         }
     }
 }

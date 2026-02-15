@@ -387,7 +387,7 @@ private struct AuthLeftPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("SECURE ACCESS")
+            Text("REVIVE")
                 .font(AppType.body(12))
                 .foregroundStyle(AppTheme.mint.opacity(0.85))
                 .tracking(2)
@@ -415,11 +415,10 @@ private struct AuthLeftPane: View {
             VStack(alignment: .leading, spacing: 10) {
                 AuthBulletRow("Track recycling totals across devices.")
                 AuthBulletRow("Sync profile details for your dashboard.")
-                AuthBulletRow("Keep credentials protected with Supabase Auth.")
             }
 
             if let quota {
-                Text("Guest access: \(quota.remaining) of \(quota.limit) scans left today.")
+                Text("Guest access: \(quota.remaining) of \(quota.limit) scans left.")
                     .font(AppType.body(12))
                     .foregroundStyle(.primary.opacity(0.7))
             }

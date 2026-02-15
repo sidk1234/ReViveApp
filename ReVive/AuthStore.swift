@@ -78,7 +78,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     var preferredColorScheme: ColorScheme? { preferences.appearanceMode?.colorScheme }
     var enableHaptics: Bool { preferences.enableHaptics ?? true }
     var showCaptureInstructions: Bool { preferences.showCaptureInstructions ?? true }
-    var autoSyncImpactEnabled: Bool { preferences.autoSyncImpact ?? true }
+    var autoSyncImpactEnabled: Bool { true }
     var allowWebSearchEnabled: Bool { preferences.allowWebSearch ?? true }
     var reduceMotionEnabled: Bool { preferences.reduceMotion ?? false }
     var defaultZipCode: String { preferences.defaultZip ?? "" }
@@ -89,6 +89,14 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         let hasSocial = providers.contains("google") || providers.contains("apple")
         return hasEmail && !hasSocial
     }
+    var canAddPassword: Bool {
+        let providers = user?.authProviders.map { $0.lowercased() } ?? []
+        guard !providers.isEmpty else { return false }
+        let hasSocial = providers.contains("google") || providers.contains("apple")
+        let hasEmail = !(user?.email ?? "").isEmpty
+        return hasSocial && hasEmail
+    }
+    var canUpdatePassword: Bool { canEditEmailPassword || canAddPassword }
 
     private let sessionKey = "recai.supabase.session"
     private let preferencesKey = "recai.user.preferences"
@@ -593,13 +601,17 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             return false
         }
         let passwordChangeRequested = (newPassword != nil && !(newPassword ?? "").isEmpty)
-        let needsReauth = emailChangeRequested || passwordChangeRequested
+        if emailChangeRequested && !canEditEmailPassword {
+            errorMessage = "Email changes are only available for email sign-in accounts."
+            return false
+        }
+        if passwordChangeRequested && !canUpdatePassword {
+            errorMessage = "Password changes are not available for this account."
+            return false
+        }
+        let needsReauth = emailChangeRequested || (passwordChangeRequested && canEditEmailPassword)
 
         if needsReauth {
-            guard canEditEmailPassword else {
-                errorMessage = "Email and password changes are only available for email sign-in accounts."
-                return false
-            }
             guard let currentEmail = user.email, !currentEmail.isEmpty else {
                 errorMessage = "Email unavailable for this account."
                 return false
@@ -632,7 +644,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
 
         do {
-            if needsReauth {
+            if emailChangeRequested || passwordChangeRequested {
                 try await supabase.updateAuthUser(
                     email: emailChangeRequested ? trimmedEmail : nil,
                     password: passwordChangeRequested ? newPassword : nil,
@@ -658,6 +670,39 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             return true
         } catch {
             errorMessage = readableProfileError(error)
+            return false
+        }
+    }
+
+    func updateProfilePhoto(photoData: Data) async -> Bool {
+        guard let supabase else { return false }
+        guard let accessToken = await ensureValidSession() else {
+            errorMessage = "Session expired. Please sign in again."
+            return false
+        }
+        guard let user else { return false }
+
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let path = "avatars/\(user.id)/\(timestamp).jpg"
+
+        do {
+            let publicURL = try await supabase.uploadProfilePhoto(
+                data: photoData,
+                path: path,
+                accessToken: accessToken
+            )
+            try await supabase.updateUserAvatarURL(publicURL, accessToken: accessToken)
+            self.user = SupabaseUser(
+                id: user.id,
+                email: user.email,
+                displayName: user.displayName,
+                preferences: user.preferences,
+                authProviders: user.authProviders,
+                avatarURL: publicURL
+            )
+            return true
+        } catch {
+            errorMessage = "Profile photo upload failed."
             return false
         }
     }
@@ -763,6 +808,19 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 }
             }
             await self.loadUserAndProfile()
+        }
+    }
+
+    func refreshImpactFromServer(history: HistoryStore, limit: Int = 500) async {
+        guard let supabase else { return }
+        guard let accessToken = await ensureValidSession() else { return }
+        do {
+            let rows = try await supabase.fetchImpactEntries(accessToken: accessToken, limit: limit)
+            history.mergeRemoteImpact(rows)
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to load impact from server."
+            }
         }
     }
 
