@@ -9,7 +9,7 @@ import PhotosUI
 import CoreLocation
 import UIKit
 
-private struct LocationContext {
+struct LocationContext {
     let latitude: Double?
     let longitude: Double?
     let locality: String?
@@ -18,285 +18,117 @@ private struct LocationContext {
     let countryCode: String?
 }
 
-/// Edit this prompt however you want.
-private func analysisPrompt(location: LocationContext, itemDescription: String? = nil) -> String {
-    var prompt =
-        """
-        ROLE
-        You are a recycling assistant with mandatory, enforced web lookup capability.
-
-        CORE TASK
-        Identify the scanned item and determine whether THAT EXACT ITEM is recyclable in the user’s local recycling program.
-
-        LOCATION IS IMPERATIVE (ABSOLUTE RULE)
-        If ANY location data is provided (ZIP, city/state, coordinates, GPS, inferred app location):
-        - You MUST perform a web search using that exact location
-        - Your search query MUST include the ZIP code or city/state text exactly
-        - You MUST base the decision on that specific local recycling program
-        - You are NOT allowed to answer generically when location exists
-        - You are NOT allowed to answer before completing a location-based search
-        - Every answer must be location-specific
-
-        HARD CONSTRAINTS (NON-NEGOTIABLE)
-        You must NOT say:
-        - typically
-        - usually
-        - may be
-        - might be
-        - check local rules
-        - check local guidelines
-        - varies by location
-        - contact your municipality
-        - depends on your area
-        You must NOT hedge, speculate, or soften the answer.
-        You must NOT mention uncertainty, assumptions, fallbacks, or lack of information.
-        You must NOT contradict yourself between scans of the same item.
-
-        CONSISTENCY RULE (FRONT / BACK SCANS)
-        If the same item is scanned from different angles (front vs back):
-        - Treat it as the same product
-        - Reconcile branding and material across images
-        - Labels and recycling symbols override visual guesses
-        - Do NOT change recyclability unless the material is conclusively different
-        - Converge to one stable answer
-
-        IDENTIFICATION RULES
-        - Identify the exact product using visible branding, logos, labels, or printed text
-        - If a brand or product name is legible, include it exactly as shown
-        - Do NOT invent brand names or product titles
-        - If no exact name is visible, provide a concise generic item name (e.g., "aluminum beverage can")
-        - Use "unknown" ONLY if you cannot identify even the item category
-
-        MATERIAL RULES
-        - Determine the primary material from visual cues (shine, seams, rigidity, thickness, cap type, labeling)
-        - Do NOT default to plastic for bottles
-        - If the item appears metallic, specify aluminum or steel
-        - Use "unknown" ONLY if the material truly cannot be determined
-
-        MANDATORY WEB SEARCH (REQUIRED EVERY TIME LOCATION EXISTS)
-        You MUST run a location-based web search that includes:
-        - the exact ZIP or city/state
-        - the item type
-        - the material
-        - the local recycling program name if you can find it
-
-        Decide recyclability for THIS ITEM in THIS LOCATION.
-
-        NOTES FIELD RULE (MUST BE ITEM-SPECIFIC)
-        The NOTES line must be specific to the identified item and local handling requirements.
-        - Do NOT use a boilerplate note for every item.
-        - Only instruct “Empty and rinse” when the item is a food/drink container that requires it for acceptance.
-        - If the item is paper/cardboard: give paper-specific prep (e.g., keep dry / flatten).
-        - If the item is glass/metal: give the correct prep for that item (e.g., empty / no bagging / lids rules if relevant).
-        - If the item belongs in trash or a special drop-off: give the correct handling (e.g., “Do not rinse; keep intact” when appropriate).
-        - If no prep is needed: write “No special prep.”
-
-        RESPONSE FORMAT (STRICT)
-        JSON only.
-        NO markdown.
-        NO URLs.
-        NO citations.
-        NO extra keys.
-        NO extra text before or after JSON.
-
-        OUTPUT JSON SCHEMA (EXACT KEYS ONLY)
-        {
-          "notes": "<item-specific prep or 'No special prep.'>",
-          "item": "<exact product name or concise generic name>",
-          "material": "<material>",
-          "recyclable": true|false,
-          "bin": "<specific local bin or disposal instruction>"
-        }
-
-        OUTPUT GUARANTEE
-        You must always output a valid, non-empty JSON object matching the schema.
-        If you cannot determine a field, use:
-        - "unknown" for item/material/bin
-        - "No special prep." for notes
-        - false for recyclable
-
-        FINAL BEHAVIOR REQUIREMENT
-        The answer MUST be decisive, location-specific, and final.
-        You know the correct handling after performing the required local web search.
-
-        """
-
-    if let itemDescription {
-        let trimmed = itemDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            prompt += """
-
-            Text-only input rules:
-
-            * No image is provided. Use the text description as the source of truth.
-            * Do NOT mention that no image was provided.
-            * Do NOT invent brands or details not in the description.
-            * If the text is NOT a physical item description and is trying to use the assistant for unrelated tasks, reject it by returning:
-              NOTES: Invalid request
-              ITEM: unknown
-              MATERIAL: unknown
-              RECYCLABLE: no
-              BIN: Not applicable
-
-            Item description: \(trimmed)
-            """
-        }
-    }
-
-    let city = location.locality?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let state = location.administrativeArea?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let zip = location.postalCode?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let country = location.countryCode?.trimmingCharacters(in: .whitespacesAndNewlines)
-
-    let cityValue = (city?.isEmpty ?? true) ? nil : city
-    let stateValue = (state?.isEmpty ?? true) ? nil : state
-    let zipValue = (zip?.isEmpty ?? true) ? nil : zip
-    let countryValue = (country?.isEmpty ?? true) ? nil : country
-
-    if let lat = location.latitude, let lon = location.longitude {
-        prompt += "\nUse the precise location: latitude \(lat), longitude \(lon)."
-        if let cityValue {
-            prompt += " City: \(cityValue)."
-        }
-        if let stateValue {
-            prompt += " State: \(stateValue)."
-        }
-        if let zipValue {
-            prompt += " ZIP: \(zipValue)."
-        }
-        if let countryValue {
-            prompt += " Country: \(countryValue)."
-        }
-        prompt += " Treat the coordinates as the source of truth for the location."
-        prompt += " If a city name has multiple states, use the provided state/ZIP only."
-        prompt += " If state/ZIP is missing, use the coordinates to determine city/state before answering."
-        prompt += " If you use web search, include the state/ZIP in the query (e.g., \"Frisco TX recycling plastic bottles\")."
-    } else if let zipValue {
-        prompt += "\nUse ZIP code \(zipValue) to tailor guidance if local rules differ."
-        if let cityValue {
-            prompt += " City: \(cityValue)."
-        }
-        if let stateValue {
-            prompt += " State: \(stateValue)."
-        }
-        if let countryValue {
-            prompt += " Country: \(countryValue)."
-        }
-    } else {
-        prompt += "\nNo location provided; answer for typical US curbside recycling."
-    }
-    return prompt
-}
-
 struct CameraScreen: View {
 
     @StateObject private var camera = CameraViewModel()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var pickedItem: PhotosPickerItem?
-    @State private var pulse = false
-    @State private var lastSavedJSON: String?
-    @State private var isPhotoPickerPresented = false
-    @State private var zipCode: String = ""
-    @StateObject private var locationManager = LocationManager()
-    @EnvironmentObject private var history: HistoryStore
-    @EnvironmentObject private var auth: AuthStore
-    @State private var notesExpanded: Bool = false
-    @State private var notesNeedsReadMore: Bool = false
-    @State private var notesBarWidth: CGFloat = 0
-    @FocusState private var zipFieldFocused: Bool
-    @State private var isTextEntryActive: Bool = false
-    @State private var isTextRequestInFlight: Bool = false
-    @State private var isHidingResult: Bool = false
-    @State private var showGuestQuotaLock: Bool = false
-    @State private var manualItemText: String = ""
-    @FocusState private var manualTextFocused: Bool
-    @Namespace private var shutterNamespace
-    @State private var scoreNotice: String?
-    @State private var lastAnalysisSource: HistorySource = .photo
-    @State private var showNoItemMessage: Bool = false
-    @State private var noItemOpacity: Double = 0
-    @State private var isLocationEntryExpanded: Bool = true
-    @State private var didToggleLocationEntry: Bool = false
-    @State private var showRecycleToast: Bool = false
-    @State private var showConfetti: Bool = false
-    @State private var zoomGestureStart: CGFloat = 1.0
-    @State private var isZooming: Bool = false
+        @State private var pulse = false
+        @State private var lastSavedJSON: String?
+        @State private var isPhotoPickerPresented = false
+        @State private var zipCode: String = ""
+        @StateObject private var locationManager = LocationManager()
+        @EnvironmentObject private var history: HistoryStore
+        @EnvironmentObject private var auth: AuthStore
+        @State private var notesExpanded: Bool = false
+        @State private var notesNeedsReadMore: Bool = false
+        @State private var notesBarWidth: CGFloat = 0
+        @FocusState private var zipFieldFocused: Bool
+        @State private var isTextEntryActive: Bool = false
+        @State private var isTextRequestInFlight: Bool = false
+        @State private var isHidingResult: Bool = false
+        @State private var showQuotaLock: Bool = false
+        @State private var quotaLockRequiresUpgrade: Bool = false
+        @State private var manualItemText: String = ""
+        @FocusState private var manualTextFocused: Bool
+        @Namespace private var shutterNamespace
+        @State private var scoreNotice: String?
+        @State private var isDuplicateResult: Bool = false
+        @State private var lastAnalysisSource: HistorySource = .photo
+        @State private var showNoItemMessage: Bool = false
+        @State private var noItemOpacity: Double = 0
+        @State private var isLocationEntryExpanded: Bool = true
+        @State private var didToggleLocationEntry: Bool = false
+        @State private var showRecycleToast: Bool = false
+        @State private var recycleToastMessage: String = "Added to Bin"
+        @State private var zoomGestureStart: CGFloat = 1.0
+        @State private var isZooming: Bool = false
 
-    private let sideSize: CGFloat = 70
-    private let shutterSize: CGFloat = 85
-    private let bottomBarInset: CGFloat = 16
-    private let statusSize: CGFloat = 150
-    private let notesCollapsedLines: Int = 2
-    private let notesExpandedMaxHeight: CGFloat = 120
-    private let textEntryKeyboardSpacing: CGFloat = 0
+        private let sideSize: CGFloat = 70
+        private let shutterSize: CGFloat = 85
+        private let bottomBarInset: CGFloat = 16
+        private let statusSize: CGFloat = 150
+        private let notesCollapsedLines: Int = 2
+        private let notesExpandedMaxHeight: CGFloat = 120
+        private let textEntryKeyboardSpacing: CGFloat = 0
 
-    private var bottomControlsPadding: CGFloat {
-        let extra = isTextEntryActive ? textEntryKeyboardSpacing : 0
-        return bottomBarInset + extra
-    }
-
-    private var zoomLabel: String {
-        let value = camera.zoomFactor
-        if abs(value - 1.0) < 0.05 {
-            return "1x"
+        private var bottomControlsPadding: CGFloat {
+            let extra = isTextEntryActive ? textEntryKeyboardSpacing : 0
+            return bottomBarInset + extra
         }
-        return String(format: "%.1fx", value)
-    }
-    
-    private var hasOverlay: Bool {
-        camera.aiIsLoading || camera.aiParsedResult != nil || camera.aiErrorText != nil
-    }
 
-    private var guestQuotaExhausted: Bool {
-        guard !auth.isSignedIn else { return false }
-        return (auth.guestQuota?.remaining ?? 0) <= 0
-    }
-
-    private var guestBannerVisible: Bool {
-        !auth.isSignedIn && auth.guestQuota != nil
-    }
-
-    private var topControlsTopPadding: CGFloat {
-        guestBannerVisible ? 154 : 60
-    }
-
-    private var captureControlsDisabled: Bool {
-        guestQuotaExhausted
-    }
-
-    private var hasLocationAccess: Bool {
-        switch locationManager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse:
-            return true
-        default:
-            return false
+        private var zoomLabel: String {
+            let value = camera.zoomFactor
+            if abs(value - 1.0) < 0.05 {
+                return "1x"
+            }
+            return String(format: "%.1fx", value)
         }
-    }
+        
+        private var hasOverlay: Bool {
+            camera.aiIsLoading || camera.aiParsedResult != nil || camera.aiErrorText != nil
+        }
 
-    private var shouldShowLocationEntry: Bool {
-        if !hasLocationAccess {
-            return true
+        private var analysisQuotaExhausted: Bool {
+            auth.isAnalysisQuotaExhausted
         }
-        return isLocationEntryExpanded
-    }
 
-    private func updateLocationEntryVisibility() {
-        if !hasLocationAccess {
-            isLocationEntryExpanded = true
-            didToggleLocationEntry = false
-            return
+        private var guestBannerVisible: Bool {
+            !auth.isSignedIn && auth.guestQuota != nil
         }
-        if !didToggleLocationEntry {
-            isLocationEntryExpanded = false
-        }
-    }
 
-    private func toggleLocationEntry() {
-        if hasLocationAccess {
-            isLocationEntryExpanded.toggle()
-            didToggleLocationEntry = true
-        } else {
-            isLocationEntryExpanded = true
+        private var topControlsTopPadding: CGFloat {
+            guestBannerVisible ? 154 : 60
         }
+
+        private var captureControlsDisabled: Bool {
+            false
+        }
+
+        private var hasLocationAccess: Bool {
+            switch locationManager.authorizationStatus {
+            case .authorizedAlways, .authorizedWhenInUse:
+                return true
+            default:
+                return false
+            }
+        }
+
+        private var shouldShowLocationEntry: Bool {
+            if !hasLocationAccess {
+                return true
+            }
+            return isLocationEntryExpanded
+        }
+
+        private func updateLocationEntryVisibility() {
+            if !hasLocationAccess {
+                isLocationEntryExpanded = true
+                didToggleLocationEntry = false
+                return
+            }
+            if !didToggleLocationEntry {
+                isLocationEntryExpanded = false
+            }
+        }
+
+        private func toggleLocationEntry() {
+            if hasLocationAccess {
+                isLocationEntryExpanded.toggle()
+                didToggleLocationEntry = true
+            } else {
+                isLocationEntryExpanded = true
+            }
         if !isLocationEntryExpanded {
             zipFieldFocused = false
         }
@@ -331,6 +163,7 @@ struct CameraScreen: View {
                                 }
                                 infoCard(result)
                                 actionButtons(for: result)
+                                aiResultDisclaimer
                             }
                             .transition(.asymmetric(
                                 insertion: .opacity.combined(with: .scale),
@@ -461,38 +294,66 @@ struct CameraScreen: View {
         let isRecyclable = result.recyclable
         return VStack(spacing: 10) {
             if isRecyclable {
-                Button {
-                    triggerRecycledCelebration()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 16, weight: .bold))
-                        Text("Mark as Recycled")
-                            .font(AppType.title(16))
-                    }
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
-                    .background(
-                        Capsule().fill(Color(red: 0.2, green: 0.9, blue: 0.55))
-                    )
-                    .shadow(color: Color(red: 0.2, green: 0.9, blue: 0.55).opacity(0.7), radius: 10, x: 0, y: 6)
-                }
-                .buttonStyle(.plain)
-            } else {
-                Button {
-                    animateResetToCapture()
-                } label: {
-                    Text("Done")
-                        .font(AppType.title(16))
+                if isDuplicateResult {
+                    Button {
+                        // Keep duplicate scans updating the existing Bin entry.
+                        markResultForRecycle()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 15, weight: .bold))
+                            Text("Done")
+                                .font(AppType.title(16))
+                        }
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 22)
                         .padding(.vertical, 12)
                         .background(
-                            Capsule().fill(Color.white.opacity(0.08))
+                            Capsule().fill(.ultraThinMaterial)
                         )
                         .overlay(
-                            Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1)
+                            Capsule().stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        markResultForRecycle()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .bold))
+                            Text("Mark for Recycle")
+                                .font(AppType.title(16))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule().fill(Color.yellow)
+                        )
+                        .shadow(color: Color.yellow.opacity(0.65), radius: 10, x: 0, y: 6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                Button {
+                    addNonRecyclableToBin()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "tray.and.arrow.down")
+                            .font(.system(size: 15, weight: .bold))
+                        Text("Add to Bin")
+                            .font(AppType.title(16))
+                    }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule().fill(Color(red: 0.92, green: 0.27, blue: 0.32))
+                        )
+                        .overlay(
+                            Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1)
                         )
                 }
                 .buttonStyle(.plain)
@@ -515,7 +376,7 @@ struct CameraScreen: View {
     }
 
     private var recycleToast: some View {
-        Text("Thanks for recycling")
+        Text(recycleToastMessage)
             .font(AppType.title(14))
             .foregroundStyle(.primary)
             .padding(.horizontal, 16)
@@ -537,22 +398,22 @@ struct CameraScreen: View {
             if notesExpanded {
                 return AnyView(
                     ScrollView(showsIndicators: false) {
-                        Text(displayText)
-                            .font(AppType.body(13))
-                            .foregroundStyle(.primary.opacity(0.92))
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        AddressLinkText(
+                            text: displayText,
+                            font: AppType.body(13),
+                            color: .primary.opacity(0.92)
+                        )
                     }
                     .frame(maxHeight: notesExpandedMaxHeight)
                 )
             }
             return AnyView(
-                Text(displayText)
-                    .font(AppType.body(13))
-                    .foregroundStyle(.primary.opacity(0.92))
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(notesCollapsedLines)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                AddressLinkText(
+                    text: displayText,
+                    font: AppType.body(13),
+                    color: .primary.opacity(0.92),
+                    lineLimit: notesCollapsedLines
+                )
             )
         }()
 
@@ -662,6 +523,7 @@ struct CameraScreen: View {
             infoRow(title: "Item", value: result.item)
             infoRow(title: "Material", value: result.material)
             infoRow(title: "Recyclable", value: result.recyclable ? "Yes" : "No")
+            infoRow(title: "Carbon Saved", value: formatCarbonSaved(result.carbonSavedKg))
             infoRow(title: "Bin", value: result.bin)
         }
         .frame(maxWidth: 360, alignment: .leading)
@@ -674,16 +536,38 @@ struct CameraScreen: View {
         .liquidGlassBackground(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    private var aiResultDisclaimer: some View {
+        Text("Results are AI-generated. Please proceed with caution.")
+            .font(AppType.body(11))
+            .foregroundStyle(.primary.opacity(0.6))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 360)
+            .padding(.top, 2)
+    }
+
     private func infoRow(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased())
                 .font(AppType.body(11))
                 .foregroundStyle(.primary.opacity(0.6))
-            Text(value.isEmpty ? "unknown" : value)
-                .font(AppType.title(15))
-                .foregroundStyle(.primary.opacity(0.95))
-                .fixedSize(horizontal: false, vertical: true)
+            AddressLinkText(
+                text: value.isEmpty ? "unknown" : value,
+                font: AppType.title(15),
+                color: .primary.opacity(0.95)
+            )
+            .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func formatCarbonSaved(_ value: Double) -> String {
+        let clamped = max(0, value)
+        if clamped == 0 {
+            return "0 kg CO2e"
+        }
+        if clamped < 1 {
+            return String(format: "%.2f kg CO2e", clamped)
+        }
+        return String(format: "%.1f kg CO2e", clamped)
     }
 
     private func clearAIResult() {
@@ -693,6 +577,7 @@ struct CameraScreen: View {
         notesExpanded = false
         notesNeedsReadMore = false
         scoreNotice = nil
+        isDuplicateResult = false
     }
 
     private func resetToCapture() {
@@ -734,28 +619,76 @@ struct CameraScreen: View {
         }
     }
 
-    private func triggerRecycledCelebration() {
-        showConfetti = true
-        showRecycleToast = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            showConfetti = false
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
-                isHidingResult = true
+    private func markResultForRecycle() {
+        addCurrentResultToBin(status: .markedForRecycle)
+    }
+
+    private func addNonRecyclableToBin() {
+        addCurrentResultToBin(status: .nonRecyclable)
+    }
+
+    private func addCurrentResultToBin(status: RecycleEntryStatus) {
+        guard let result = camera.aiParsedResult else { return }
+        guard let raw = camera.aiResultText else { return }
+        guard lastSavedJSON != raw else {
+            triggerAddedToBinFeedback(message: "Added to Bin")
+            return
+        }
+
+        let previewImage = lastAnalysisSource == .photo ? camera.previewImageForHistory() : nil
+        let insertResult = history.add(
+            result: result,
+            rawJSON: raw,
+            source: lastAnalysisSource,
+            image: previewImage,
+            status: status
+        )
+
+        switch insertResult {
+        case .added(let entry):
+            if auth.autoSyncImpactEnabled {
+                auth.submitImpact(entry: entry, history: history)
+            }
+            if status == .markedForRecycle {
+                scoreNotice = "Added to Bin. Open the Bin tab and tap the item to Mark as Recycled."
+            } else {
+                scoreNotice = nil
+            }
+        case .duplicate(let entry):
+            if auth.autoSyncImpactEnabled {
+                auth.submitImpact(entry: entry, history: history)
+            }
+            if status == .markedForRecycle {
+                scoreNotice = "Thanks for recycling, you've already scanned this item."
+            } else {
+                scoreNotice = nil
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.45) {
+        lastSavedJSON = raw
+        if !auth.isSignedIn {
+            auth.refreshGuestQuota()
+        }
+        triggerAddedToBinFeedback(message: status == .markedForRecycle ? "Marked for Recycle" : "Added to Bin")
+    }
+
+    private func triggerAddedToBinFeedback(message: String) {
+        recycleToastMessage = message
+        showRecycleToast = true
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+            isHidingResult = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             showRecycleToast = false
             animateResetToCapture()
         }
     }
 
-    private func resolveLocationContext() -> (LocationContext, Bool) {
+    private func resolveLocationContext() -> LocationContext {
         let usableLocation = locationManager.usableLocation
         let hasLocation = usableLocation != nil
         let resolvedZip = locationManager.postalCode.isEmpty ? nil : locationManager.postalCode
         let manualZip = zipCode.isEmpty ? nil : zipCode
         let zipForPrompt = hasLocation ? resolvedZip : manualZip
-        let useWebSearch = auth.allowWebSearchEnabled && (hasLocation || (zipForPrompt != nil))
         let context = LocationContext(
             latitude: usableLocation?.coordinate.latitude,
             longitude: usableLocation?.coordinate.longitude,
@@ -764,7 +697,7 @@ struct CameraScreen: View {
             postalCode: zipForPrompt,
             countryCode: hasLocation && !locationManager.countryCode.isEmpty ? locationManager.countryCode : nil
         )
-        return (context, useWebSearch)
+        return context
     }
 
     private func applyDefaultZipIfNeeded() {
@@ -795,35 +728,45 @@ struct CameraScreen: View {
         let trimmed = manualItemText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !camera.aiIsLoading else { return }
-        if guestQuotaExhausted {
-            showGuestQuotaLock = true
+        if analysisQuotaExhausted {
+            showQuotaLockOverlay()
+            return
+        }
+        guard auth.consumeAnalysisRequest() else {
+            showQuotaLockOverlay()
             return
         }
         lastAnalysisSource = .text
         isTextRequestInFlight = true
-        let (context, useWebSearch) = resolveLocationContext()
+        lastSavedJSON = nil
+        let context = resolveLocationContext()
         zipFieldFocused = false
         manualTextFocused = false
         clearAIResult()
         if let accessToken = auth.session?.accessToken, !accessToken.isEmpty {
             camera.sendTextToOpenAI(
-                prompt: analysisPrompt(location: context, itemDescription: trimmed),
                 itemText: trimmed,
-                useWebSearch: useWebSearch,
+                location: context,
                 accessToken: accessToken
             )
         } else {
             Task { @MainActor in
                 _ = await auth.fetchGuestQuota()
                 camera.sendTextToOpenAI(
-                    prompt: analysisPrompt(location: context, itemDescription: trimmed),
                     itemText: trimmed,
-                    useWebSearch: useWebSearch,
+                    location: context,
                     accessToken: nil
                 )
             }
         }
         closeTextEntry()
+    }
+
+    private func showQuotaLockOverlay() {
+        quotaLockRequiresUpgrade = auth.isSignedIn
+        withAnimation(.easeInOut(duration: 0.25)) {
+            showQuotaLock = true
+        }
     }
 
     private func locationIconButton(action: @escaping () -> Void) -> some View {
@@ -1102,25 +1045,34 @@ struct CameraScreen: View {
         }
     }
 
-    private var guestQuotaOverlay: some View {
+    private var quotaOverlay: some View {
         ZStack {
             Color.black.opacity(0.6)
                 .ignoresSafeArea()
+                .allowsHitTesting(false)
 
             VStack(spacing: 12) {
-                Text("Sign in to keep recycling")
+                Text(quotaLockRequiresUpgrade ? "Upgrade to keep recycling" : "Sign in to keep recycling")
                     .font(AppType.title(20))
                     .foregroundStyle(.white)
 
-                Text("Guest scans are used up. Please sign in to scan more.")
+                Text(
+                    quotaLockRequiresUpgrade
+                        ? "You have used all free signed-in monthly scans. Upgrade your plan to continue analyzing items."
+                        : "Guest scans are used up. Please sign in to scan more."
+                )
                     .font(AppType.body(14))
                     .foregroundStyle(.white.opacity(0.9))
                     .multilineTextAlignment(.center)
 
                 Button {
-                    NotificationCenter.default.post(name: .reviveRequestSignIn, object: nil)
+                    if quotaLockRequiresUpgrade {
+                        NotificationCenter.default.post(name: .reviveRequestUpgrade, object: nil)
+                    } else {
+                        NotificationCenter.default.post(name: .reviveRequestSignIn, object: nil)
+                    }
                 } label: {
-                    Text("Sign in")
+                    Text(quotaLockRequiresUpgrade ? "Upgrade" : "Sign in")
                         .font(AppType.title(16))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 24)
@@ -1139,9 +1091,9 @@ struct CameraScreen: View {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .stroke(Color.white.opacity(0.2), lineWidth: 1)
             )
+            .allowsHitTesting(true)
         }
         .transition(.opacity)
-        .allowsHitTesting(true)
     }
 
     var body: some View {
@@ -1150,7 +1102,7 @@ struct CameraScreen: View {
             // MARK: - Preview or captured image
             if let image = camera.capturedImage {
                 GeometryReader { geo in
-                    let selectionEnabled = !hasOverlay && !captureControlsDisabled
+                    let selectionEnabled = !hasOverlay && !captureControlsDisabled && !showQuotaLock
                     ZStack {
                         Image(uiImage: image)
                             .resizable()
@@ -1257,7 +1209,18 @@ struct CameraScreen: View {
                 HStack {
                     if camera.capturedImage != nil {
                         Button {
-                            animateResetToCapture()
+                            guard !showQuotaLock else { return }
+                            if let result = camera.aiParsedResult {
+                                if result.recyclable && isDuplicateResult {
+                                    markResultForRecycle()
+                                } else if result.recyclable {
+                                    markResultForRecycle()
+                                } else {
+                                    addNonRecyclableToBin()
+                                }
+                            } else {
+                                animateResetToCapture()
+                            }
                         } label: {
                             Image(systemName: "xmark")
                                 .foregroundStyle(.primary)
@@ -1266,6 +1229,7 @@ struct CameraScreen: View {
                                 .liquidGlassButton(in: Circle(), interactive: true)
                         }
                         .buttonStyle(.plain)
+                        .offset(y: guestBannerVisible ? 8 : 0)
                     }
 
                     Spacer()
@@ -1287,12 +1251,6 @@ struct CameraScreen: View {
             aiOverlay
                 .allowsHitTesting(!captureControlsDisabled)
 
-            if showConfetti {
-                ConfettiView()
-                    .ignoresSafeArea()
-                    .transition(.opacity)
-            }
-
             if showRecycleToast {
                 VStack {
                     recycleToast
@@ -1302,8 +1260,8 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity)
             }
 
-            if showGuestQuotaLock {
-                guestQuotaOverlay
+            if showQuotaLock {
+                quotaOverlay
             }
 
             // MARK: - Bottom controls
@@ -1360,18 +1318,22 @@ struct CameraScreen: View {
                         if !hasOverlay {
                             Button {
                                 guard enabled else { return }
-                                if guestQuotaExhausted {
-                                    showGuestQuotaLock = true
+                                if analysisQuotaExhausted {
+                                    showQuotaLockOverlay()
                                     return
                                 }
-                                let (context, useWebSearch) = resolveLocationContext()
+                                guard auth.consumeAnalysisRequest() else {
+                                    showQuotaLockOverlay()
+                                    return
+                                }
+                                let context = resolveLocationContext()
                                 zipFieldFocused = false
                                 manualTextFocused = false
                                 lastAnalysisSource = .photo
+                                lastSavedJSON = nil
                                 let accessToken = auth.session?.accessToken
                                 camera.sendSelectionToOpenAI(
-                                    prompt: analysisPrompt(location: context),
-                                    useWebSearch: useWebSearch,
+                                    location: context,
                                     accessToken: accessToken
                                 )
 
@@ -1395,18 +1357,22 @@ struct CameraScreen: View {
                             .opacity(enabled ? 1.0 : 0.55)
                         } else if camera.aiErrorText != nil {
                             Button {
-                                if guestQuotaExhausted {
-                                    showGuestQuotaLock = true
+                                if analysisQuotaExhausted {
+                                    showQuotaLockOverlay()
                                     return
                                 }
-                                let (context, useWebSearch) = resolveLocationContext()
+                                guard auth.consumeAnalysisRequest() else {
+                                    showQuotaLockOverlay()
+                                    return
+                                }
+                                let context = resolveLocationContext()
                                 zipFieldFocused = false
                                 manualTextFocused = false
                                 lastAnalysisSource = .photo
+                                lastSavedJSON = nil
                                 let accessToken = auth.session?.accessToken
                                 camera.sendSelectionToOpenAI(
-                                    prompt: analysisPrompt(location: context),
-                                    useWebSearch: useWebSearch,
+                                    location: context,
                                     accessToken: accessToken
                                 )
                             } label: {
@@ -1440,19 +1406,17 @@ struct CameraScreen: View {
         .onAppear {
             pulse = !auth.reduceMotionEnabled
             camera.hapticsEnabled = auth.enableHaptics
-            showGuestQuotaLock = guestQuotaExhausted
             updateLocationEntryVisibility()
             applyDefaultZipIfNeeded()
             locationManager.refreshLocationIfAuthorized()
-            if camera.capturedImage == nil {
-                camera.startSession()
-            }
+            camera.startSession()
         }
         .onDisappear {
             camera.stopSession()
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.9), value: camera.aiIsLoading)
         .animation(.spring(response: 0.45, dampingFraction: 0.9), value: camera.aiParsedResult)
+        .animation(.easeInOut(duration: 0.25), value: showQuotaLock)
         .onChange(of: locationManager.postalCode) { _, newValue in
             guard !newValue.isEmpty else { return }
             zipCode = newValue
@@ -1494,22 +1458,37 @@ struct CameraScreen: View {
             if let message = newValue?.lowercased() {
                 if message.contains("guest quota exceeded")
                     || message.contains("quota_exceeded")
-                    || message.contains("guest access unavailable") {
-                    showGuestQuotaLock = true
+                    || message.contains("guest access unavailable")
+                    || message.contains("quota exceeded") {
+                    showQuotaLockOverlay()
                 }
             }
         }
         .onChange(of: auth.guestQuota) { _, newValue in
             guard !auth.isSignedIn else { return }
-            if let newValue {
-                showGuestQuotaLock = newValue.remaining <= 0
-            } else {
-                showGuestQuotaLock = false
+            if let newValue, newValue.remaining > 0 {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showQuotaLock = false
+                }
+            } else if newValue == nil {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showQuotaLock = false
+                }
             }
         }
         .onChange(of: auth.isSignedIn) { _, newValue in
             if newValue {
-                showGuestQuotaLock = false
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showQuotaLock = false
+                }
+            }
+        }
+        .onChange(of: auth.signedInQuotaRemaining) { _, newValue in
+            guard auth.isSignedIn else { return }
+            if (newValue ?? 0) > 0 || auth.hasUnlimitedAnalysis {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showQuotaLock = false
+                }
             }
         }
         .onChange(of: camera.noItemDetected) { _, newValue in
@@ -1543,105 +1522,38 @@ struct CameraScreen: View {
             if newValue != nil {
                 isTextRequestInFlight = false
             }
-            guard let result = newValue, let raw = camera.aiResultText else { return }
-            guard lastSavedJSON != raw else { return }
-            let previewImage = lastAnalysisSource == .photo ? camera.previewImageForHistory() : nil
-            switch history.add(result: result, rawJSON: raw, source: lastAnalysisSource, image: previewImage) {
-            case .added(let entry):
-                if auth.autoSyncImpactEnabled {
-                    auth.submitImpact(entry: entry, history: history)
-                }
-                if entry.source == .text && entry.recyclable {
-                    scoreNotice = "Thanks for recycling - text entries won't add to your score."
+            if let result = newValue {
+                let duplicate = history.isDuplicateScan(result: result)
+                let recyclableDuplicate = duplicate && result.recyclable
+                isDuplicateResult = recyclableDuplicate
+                if recyclableDuplicate {
+                    scoreNotice = "Thanks for recycling, you've already scanned this item."
                 } else {
                     scoreNotice = nil
                 }
-            case .duplicate(let entry):
-                if auth.autoSyncImpactEnabled {
-                    auth.submitImpact(entry: entry, history: history)
-                }
-                if entry.recyclable {
-                    scoreNotice = "Thanks for recycling - this won't add to your score."
-                } else {
-                    scoreNotice = nil
-                }
-            }
-            lastSavedJSON = raw
-            if !auth.isSignedIn {
-                auth.refreshGuestQuota()
+            } else {
+                isDuplicateResult = false
+                scoreNotice = nil
             }
         }
-    }
-}
-
-private struct ConfettiView: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
-        let view = ConfettiEmitterView()
-        view.isUserInteractionEnabled = false
-        view.backgroundColor = .clear
-
-        let colors: [UIColor] = [
-            UIColor(red: 0.2, green: 0.9, blue: 0.55, alpha: 1.0),
-            UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1.0),
-            UIColor(red: 0.95, green: 0.78, blue: 0.2, alpha: 1.0),
-            UIColor(red: 0.95, green: 0.35, blue: 0.45, alpha: 1.0)
-        ]
-
-        view.emitter.emitterCells = colors.map { color in
-            let cell = CAEmitterCell()
-            cell.birthRate = 60
-            cell.lifetime = 3.6
-            cell.velocity = 320
-            cell.velocityRange = 200
-            cell.emissionLongitude = .pi
-            cell.emissionRange = .pi / 1.8
-            cell.spin = 6
-            cell.spinRange = 8
-            cell.scale = 0.035
-            cell.scaleRange = 0.06
-            cell.color = color.cgColor
-            cell.contents = makeConfettiImage(color: color).cgImage
-            return cell
+        .onChange(of: camera.capturedImage) { _, newValue in
+            // Defensive restart to avoid occasional black preview when returning to camera mode.
+            if newValue == nil {
+                camera.startSession()
+            }
         }
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {}
-
-    private func makeConfettiImage(color: UIColor) -> UIImage {
-        let size = CGSize(width: 16, height: 10)
-        UIGraphicsBeginImageContextWithOptions(size, false, 0)
-        let ctx = UIGraphicsGetCurrentContext()
-        ctx?.setFillColor(color.cgColor)
-        ctx?.fill(CGRect(origin: .zero, size: size))
-        let image = UIGraphicsGetImageFromCurrentImageContext() ?? UIImage()
-        UIGraphicsEndImageContext()
-        return image
-    }
-}
-
-private final class ConfettiEmitterView: UIView {
-    let emitter = CAEmitterLayer()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        emitter.emitterShape = .line
-        emitter.renderMode = .additive
-        layer.addSublayer(emitter)
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        emitter.emitterShape = .line
-        emitter.renderMode = .additive
-        layer.addSublayer(emitter)
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        emitter.frame = bounds
-        emitter.emitterPosition = CGPoint(x: bounds.midX, y: -10)
-        emitter.emitterSize = CGSize(width: bounds.width, height: 1)
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                if camera.capturedImage == nil {
+                    camera.startSession()
+                }
+            case .inactive, .background:
+                camera.stopSession()
+            @unknown default:
+                break
+            }
+        }
     }
 }
 

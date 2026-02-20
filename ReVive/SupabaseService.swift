@@ -111,13 +111,27 @@ struct SupabaseUser: Equatable {
     let preferences: UserPreferences?
     let authProviders: [String]
     let avatarURL: String?
+    let isProSubscriber: Bool?
+    let analysisQuotaRemaining: Int?
+    let analysisQuotaMonth: String?
+    let signedInMonthlyQuotaLimit: Int?
 }
 
 struct AppSettings: Decodable {
     let photoStorageEnabled: Bool
+    let guestQuotaLimit: Int?
+    let signedInFreeQuotaLimit: Int?
+    let proMonthlyPriceCents: Int?
+    let proBillingURL: String?
+    let proPortalURL: String?
 
     private enum CodingKeys: String, CodingKey {
         case photoStorageEnabled = "photo_storage_enabled"
+        case guestQuotaLimit = "guest_quota_limit"
+        case signedInFreeQuotaLimit = "signed_in_free_quota_limit"
+        case proMonthlyPriceCents = "pro_monthly_price_cents"
+        case proBillingURL = "pro_billing_url"
+        case proPortalURL = "pro_portal_url"
     }
 }
 
@@ -197,6 +211,9 @@ struct LeaderboardEntry: Identifiable, Decodable {
     let totalScans: Int?
 
     var id: String { userId }
+    var totalCarbonSavedKg: Double {
+        max(0, Double(totalPoints) / 1000.0)
+    }
 
     private enum CodingKeys: String, CodingKey {
         case userId = "user_id"
@@ -513,6 +530,27 @@ final class SupabaseService {
             metadata?["avatar"] as? String
         let preferences = UserPreferences.from(metadata: metadata)
         let authProviders = parseAuthProviders(appMetadata: appMetadata, identities: dict["identities"] as? [[String: Any]])
+        let isProSubscriber =
+            boolFromMetadata(
+                appMetadata,
+                keys: ["is_pro_subscriber", "subscription_active", "is_pro", "pro_active"]
+            )
+            ?? boolFromMetadata(
+                metadata,
+                keys: ["is_pro_subscriber", "subscription_active", "is_pro", "pro_active"]
+            )
+        let analysisQuotaRemaining = intFromMetadata(
+            metadata,
+            keys: ["analysis_quota_remaining", "signed_in_quota_remaining", "free_quota_remaining"]
+        )
+        let analysisQuotaMonth = stringFromMetadata(
+            metadata,
+            keys: ["analysis_quota_month", "signed_in_quota_month", "free_quota_month"]
+        )
+        let signedInMonthlyQuotaLimit = intFromMetadata(
+            metadata,
+            keys: ["signed_in_monthly_quota_limit", "signed_in_free_quota_limit"]
+        )
 
         return SupabaseUser(
             id: id,
@@ -520,8 +558,57 @@ final class SupabaseService {
             displayName: displayName,
             preferences: preferences,
             authProviders: authProviders,
-            avatarURL: avatarURL
+            avatarURL: avatarURL,
+            isProSubscriber: isProSubscriber,
+            analysisQuotaRemaining: analysisQuotaRemaining,
+            analysisQuotaMonth: analysisQuotaMonth,
+            signedInMonthlyQuotaLimit: signedInMonthlyQuotaLimit
         )
+    }
+
+    private func boolFromMetadata(_ metadata: [String: Any]?, keys: [String]) -> Bool? {
+        guard let metadata else { return nil }
+        for key in keys {
+            if let value = metadata[key] as? Bool {
+                return value
+            }
+            if let value = metadata[key] as? Int {
+                return value != 0
+            }
+            if let value = metadata[key] as? String {
+                let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if ["true", "1", "yes", "y"].contains(normalized) { return true }
+                if ["false", "0", "no", "n"].contains(normalized) { return false }
+            }
+        }
+        return nil
+    }
+
+    private func intFromMetadata(_ metadata: [String: Any]?, keys: [String]) -> Int? {
+        guard let metadata else { return nil }
+        for key in keys {
+            if let value = metadata[key] as? Int {
+                return value
+            }
+            if let value = metadata[key] as? Double {
+                return Int(value.rounded())
+            }
+            if let value = metadata[key] as? String, let parsed = Int(value) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    private func stringFromMetadata(_ metadata: [String: Any]?, keys: [String]) -> String? {
+        guard let metadata else { return nil }
+        for key in keys {
+            if let value = metadata[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
     }
 
     private func parseAuthProviders(appMetadata: [String: Any]?, identities: [[String: Any]]?) -> [String] {
@@ -553,6 +640,13 @@ final class SupabaseService {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         try await updateUserMetadata(["avatar_url": trimmed], accessToken: accessToken)
+    }
+
+    func updateUserSubscriptionStatus(isActive: Bool, accessToken: String) async throws {
+        try await updateUserMetadata(
+            ["is_pro_subscriber": isActive],
+            accessToken: accessToken
+        )
     }
 
     private func updateUserMetadata(_ metadata: [String: Any], accessToken: String) async throws {
@@ -892,7 +986,10 @@ final class SupabaseService {
         let url = config.url.appendingPathComponent("rest/v1/app_settings")
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         components?.queryItems = [
-            URLQueryItem(name: "select", value: "photo_storage_enabled"),
+            URLQueryItem(
+                name: "select",
+                value: "photo_storage_enabled,guest_quota_limit,signed_in_free_quota_limit,pro_monthly_price_cents,pro_billing_url,pro_portal_url"
+            ),
             URLQueryItem(name: "id", value: "eq.1"),
             URLQueryItem(name: "limit", value: "1")
         ]
@@ -907,11 +1004,31 @@ final class SupabaseService {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
-        guard (200...299).contains(http.statusCode) else {
-            let msg = String(data: data, encoding: .utf8) ?? ""
-            throw ServiceError.httpError(http.statusCode, msg)
+        if (200...299).contains(http.statusCode) {
+            let rows = try jsonDecoder.decode([AppSettings].self, from: data)
+            return rows.first
         }
-        let rows = try jsonDecoder.decode([AppSettings].self, from: data)
+        // Backward-compatible fallback if newer app_settings columns are not present yet.
+        var fallbackComponents = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        fallbackComponents?.queryItems = [
+            URLQueryItem(name: "select", value: "photo_storage_enabled"),
+            URLQueryItem(name: "id", value: "eq.1"),
+            URLQueryItem(name: "limit", value: "1")
+        ]
+        guard let fallbackURL = fallbackComponents?.url else { throw ServiceError.invalidCallback }
+        var fallbackRequest = URLRequest(url: fallbackURL)
+        fallbackRequest.httpMethod = "GET"
+        fallbackRequest.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        if let accessToken {
+            fallbackRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        let (fallbackData, fallbackResponse) = try await URLSession.shared.data(for: fallbackRequest)
+        guard let fallbackHTTP = fallbackResponse as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(fallbackHTTP.statusCode) else {
+            let msg = String(data: fallbackData, encoding: .utf8) ?? ""
+            throw ServiceError.httpError(fallbackHTTP.statusCode, msg)
+        }
+        let rows = try jsonDecoder.decode([AppSettings].self, from: fallbackData)
         return rows.first
     }
 

@@ -57,9 +57,15 @@ enum ImpactKey {
     static func areSimilarTokens(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
         guard !lhs.isEmpty, !rhs.isEmpty else { return false }
         let intersection = lhs.intersection(rhs).count
+        let minCount = min(lhs.count, rhs.count)
+        if minCount >= 3 {
+            let overlap = Double(intersection) / Double(minCount)
+            if intersection >= 3, overlap >= 0.7 {
+                return true
+            }
+        }
         let union = lhs.union(rhs).count
         let jaccard = Double(intersection) / Double(union)
-        let minCount = min(lhs.count, rhs.count)
         if minCount <= 2 {
             return intersection >= 1 && jaccard >= 0.34
         }
@@ -73,15 +79,38 @@ enum ImpactKey {
             "in", "on", "at", "to", "from", "by", "into", "over", "under",
             "this", "that", "these", "those", "item", "recyclable", "recycling"
         ]
+        let measurementTokens: Set<String> = [
+            "oz", "floz", "fl", "ml", "l", "ltr", "liter", "liters",
+            "g", "kg", "lb", "lbs", "ct", "count", "pack", "pk",
+            "qt", "gal", "cm", "mm", "inch", "inches"
+        ]
+        let typoCorrections: [String: String] = [
+            "stailnless": "stainless",
+            "stainles": "stainless",
+            "stainlss": "stainless",
+            "vacum": "vacuum",
+            "vaccum": "vacuum",
+            "vaccuum": "vacuum",
+            "insualted": "insulated",
+            "insulted": "insulated",
+            // Common model wording variance for powered appliances.
+            "electronic": "electric",
+            "electronics": "electric"
+        ]
+
         let cleaned = text.lowercased()
         let parts = cleaned.components(separatedBy: CharacterSet.alphanumerics.inverted)
         let tokens = parts.compactMap { raw -> String? in
             guard !raw.isEmpty else { return nil }
             guard !stopwords.contains(raw) else { return nil }
-            if raw.count > 3, raw.hasSuffix("s") {
-                return String(raw.dropLast())
+            if raw.allSatisfy(\.isNumber) { return nil }
+            if measurementTokens.contains(raw) { return nil }
+
+            let corrected = typoCorrections[raw] ?? raw
+            if corrected.count > 3, corrected.hasSuffix("s") {
+                return String(corrected.dropLast())
             }
-            return raw
+            return corrected
         }
         return Set(tokens)
     }

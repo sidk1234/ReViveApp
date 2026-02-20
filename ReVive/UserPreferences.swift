@@ -11,7 +11,6 @@ struct UserPreferences: Codable, Equatable {
     var enableHaptics: Bool?
     var showCaptureInstructions: Bool?
     var autoSyncImpact: Bool?
-    var allowWebSearch: Bool?
     var reduceMotion: Bool?
 
     static let `default` = UserPreferences(
@@ -20,7 +19,6 @@ struct UserPreferences: Codable, Equatable {
         enableHaptics: nil,
         showCaptureInstructions: nil,
         autoSyncImpact: nil,
-        allowWebSearch: nil,
         reduceMotion: nil
     )
 
@@ -31,7 +29,6 @@ struct UserPreferences: Codable, Equatable {
             enableHaptics != nil ||
             showCaptureInstructions != nil ||
             autoSyncImpact != nil ||
-            allowWebSearch != nil ||
             reduceMotion != nil
     }
 
@@ -65,10 +62,6 @@ struct UserPreferences: Codable, Equatable {
             result.autoSyncImpact = autoSyncImpact
             hasValue = true
         }
-        if let allowWebSearch = prefs["allow_web_search"] as? Bool {
-            result.allowWebSearch = allowWebSearch
-            hasValue = true
-        }
         if let reduceMotion = prefs["reduce_motion"] as? Bool {
             result.reduceMotion = reduceMotion
             hasValue = true
@@ -94,9 +87,6 @@ struct UserPreferences: Codable, Equatable {
         }
         if let autoSyncImpact {
             payload["auto_sync_impact"] = autoSyncImpact
-        }
-        if let allowWebSearch {
-            payload["allow_web_search"] = allowWebSearch
         }
         if let reduceMotion {
             payload["reduce_motion"] = reduceMotion

@@ -33,6 +33,14 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             saveGuestQuota(guestQuota)
         }
     }
+    @Published var hasActiveSubscription: Bool = false
+    @Published private(set) var didResolveSubscriptionState: Bool = false
+    @Published private(set) var signedInQuotaRemaining: Int?
+    @Published private(set) var guestQuotaLimit: Int = 5
+    @Published private(set) var signedInFreeQuotaLimit: Int = 25
+    @Published private(set) var proMonthlyPriceCents: Int = 500
+    @Published private(set) var proBillingURL: String?
+    @Published private(set) var proPortalURL: String?
 
     var displayErrorMessage: String? {
         guard let message = errorMessage, !message.isEmpty else { return nil }
@@ -79,7 +87,6 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     var enableHaptics: Bool { preferences.enableHaptics ?? true }
     var showCaptureInstructions: Bool { preferences.showCaptureInstructions ?? true }
     var autoSyncImpactEnabled: Bool { true }
-    var allowWebSearchEnabled: Bool { preferences.allowWebSearch ?? true }
     var reduceMotionEnabled: Bool { preferences.reduceMotion ?? false }
     var defaultZipCode: String { preferences.defaultZip ?? "" }
     var canEditEmailPassword: Bool {
@@ -102,6 +109,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     private let preferencesKey = "recai.user.preferences"
     private let guestQuotaKey = "recai.guest.quota"
     private let guestQuotaFilename = "guest-quota.json"
+    private var notificationObservers: [NSObjectProtocol] = []
     private var currentNonce: String?
     private var needsProfileRefresh = false
     private var didAttemptGoogleRestore = false
@@ -130,6 +138,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
 
     override init() {
         super.init()
+        bindRuntimeNotifications()
         loadPreferences()
         loadGuestQuota()
 
@@ -146,16 +155,117 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     private func loadGuestQuota() {
         if let data = try? Data(contentsOf: guestQuotaURL()),
            let decoded = try? JSONDecoder().decode(GuestQuota.self, from: data) {
-            guestQuota = decoded
+            guestQuota = normalizedGuestQuota(decoded)
             return
         }
 
         guard let data = UserDefaults.standard.data(forKey: guestQuotaKey) else { return }
         if let decoded = try? JSONDecoder().decode(GuestQuota.self, from: data) {
-            guestQuota = decoded
-            saveGuestQuota(decoded)
+            guestQuota = normalizedGuestQuota(decoded)
+            saveGuestQuota(guestQuota)
             UserDefaults.standard.removeObject(forKey: guestQuotaKey)
         }
+    }
+
+    private func normalizedGuestQuota(_ quota: GuestQuota) -> GuestQuota {
+        let used = max(0, quota.used)
+        let limit = quota.limit > 0 ? quota.limit : guestQuotaLimit
+        let cappedUsed = min(used, limit)
+        let remaining = max(0, limit - cappedUsed)
+        return GuestQuota(used: cappedUsed, remaining: remaining, limit: limit)
+    }
+
+    private func applyCloudSubscriptionState(from profile: SupabaseUser) {
+        if let cloudIsPro = profile.isProSubscriber {
+            hasActiveSubscription = cloudIsPro
+        }
+        if hasActiveSubscription {
+            signedInQuotaRemaining = nil
+            return
+        }
+
+        if let cloudLimit = profile.signedInMonthlyQuotaLimit, cloudLimit > 0 {
+            signedInFreeQuotaLimit = cloudLimit
+        }
+
+        if let cloudRemaining = profile.analysisQuotaRemaining {
+            signedInQuotaRemaining = max(0, cloudRemaining)
+            return
+        }
+
+        // Do not force "free" from unknown cloud state; preserve existing quota/subscription
+        // until a definitive update arrives.
+        if profile.isProSubscriber == nil {
+            return
+        }
+
+        signedInQuotaRemaining = max(0, signedInFreeQuotaLimit)
+    }
+
+    private func clearSignedInQuotaState() {
+        signedInQuotaRemaining = nil
+        hasActiveSubscription = false
+        didResolveSubscriptionState = false
+    }
+
+    var signedInQuotaLimit: Int { signedInFreeQuotaLimit }
+    var hasUnlimitedAnalysis: Bool { isSignedIn && hasActiveSubscription }
+
+    var remainingAnalysisRequests: Int? {
+        if !isSignedIn {
+            return guestQuota?.remaining
+        }
+        if hasUnlimitedAnalysis {
+            return nil
+        }
+        return signedInQuotaRemaining
+    }
+
+    var isAnalysisQuotaExhausted: Bool {
+        guard isSignedIn else {
+            return (guestQuota?.remaining ?? 0) <= 0
+        }
+        if hasUnlimitedAnalysis { return false }
+        guard let signedInQuotaRemaining else { return false }
+        return signedInQuotaRemaining <= 0
+    }
+
+    @discardableResult
+    func consumeAnalysisRequest() -> Bool {
+        if !isSignedIn {
+            return !isAnalysisQuotaExhausted
+        }
+        if hasUnlimitedAnalysis { return true }
+        let current = max(0, signedInQuotaRemaining ?? signedInFreeQuotaLimit)
+        guard current > 0 else {
+            signedInQuotaRemaining = 0
+            return false
+        }
+        return true
+    }
+
+    func applySignedInQuotaUpdate(_ update: SignedInQuotaUpdate) {
+        if update.limit > 0 {
+            signedInFreeQuotaLimit = update.limit
+        }
+        if let isPro = update.isPro {
+            hasActiveSubscription = isPro
+        }
+        if hasActiveSubscription {
+            signedInQuotaRemaining = nil
+        } else if let remaining = update.remaining {
+            signedInQuotaRemaining = max(0, remaining)
+        }
+        if isSignedIn {
+            didResolveSubscriptionState = true
+        }
+    }
+
+    func applyGuestQuotaUpdate(_ quota: GuestQuota) {
+        if quota.limit > 0 {
+            guestQuotaLimit = quota.limit
+        }
+        guestQuota = normalizedGuestQuota(quota)
     }
 
     private func saveGuestQuota(_ quota: GuestQuota?) {
@@ -176,6 +286,19 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir.appendingPathComponent(guestQuotaFilename)
+    }
+
+    private func bindRuntimeNotifications() {
+        let token = NotificationCenter.default.addObserver(
+            forName: .reviveSignedQuotaUpdated,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self, self.isSignedIn else { return }
+            guard let update = note.object as? SignedInQuotaUpdate else { return }
+            self.applySignedInQuotaUpdate(update)
+        }
+        notificationObservers.append(token)
     }
 
     // ✅ Added: centralized diagnostic log
@@ -244,12 +367,6 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     func updateAutoSyncImpact(_ enabled: Bool) {
         var updated = preferences
         updated.autoSyncImpact = enabled
-        applyPreferences(updated, sync: true)
-    }
-
-    func updateAllowWebSearch(_ enabled: Bool) {
-        var updated = preferences
-        updated.allowWebSearch = enabled
         applyPreferences(updated, sync: true)
     }
 
@@ -536,7 +653,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             guard let self, let supabase else { return }
             do {
                 let quota = try await supabase.fetchGuestQuota()
-                self.guestQuota = quota
+                self.applyGuestQuotaUpdate(quota)
             } catch {
                 self.guestQuota = nil
             }
@@ -551,8 +668,8 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         guard let supabase else { return nil }
         do {
             let quota = try await supabase.fetchGuestQuota()
-            guestQuota = quota
-            return quota
+            applyGuestQuotaUpdate(quota)
+            return guestQuota
         } catch {
             return nil
         }
@@ -565,8 +682,33 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             do {
                 let settings = try await supabase.fetchAppSettings(accessToken: session?.accessToken)
                 self.photoStorageEnabled = settings?.photoStorageEnabled ?? false
+                if let guestLimit = settings?.guestQuotaLimit, guestLimit > 0 {
+                    self.guestQuotaLimit = guestLimit
+                } else {
+                    self.guestQuotaLimit = 5
+                }
+                if let signedInLimit = settings?.signedInFreeQuotaLimit, signedInLimit > 0 {
+                    self.signedInFreeQuotaLimit = signedInLimit
+                } else {
+                    self.signedInFreeQuotaLimit = 25
+                }
+                if let priceCents = settings?.proMonthlyPriceCents, priceCents > 0 {
+                    self.proMonthlyPriceCents = priceCents
+                } else {
+                    self.proMonthlyPriceCents = 500
+                }
+                self.proBillingURL = settings?.proBillingURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.proPortalURL = settings?.proPortalURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let quota = self.guestQuota {
+                    self.guestQuota = self.normalizedGuestQuota(quota)
+                }
             } catch {
                 self.photoStorageEnabled = false
+                self.guestQuotaLimit = 5
+                self.signedInFreeQuotaLimit = 25
+                self.proMonthlyPriceCents = 500
+                self.proBillingURL = nil
+                self.proPortalURL = nil
             }
         }
     }
@@ -665,7 +807,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 displayName: trimmed,
                 preferences: user.preferences,
                 authProviders: user.authProviders,
-                avatarURL: user.avatarURL
+                avatarURL: user.avatarURL,
+                isProSubscriber: user.isProSubscriber,
+                analysisQuotaRemaining: user.analysisQuotaRemaining,
+                analysisQuotaMonth: user.analysisQuotaMonth,
+                signedInMonthlyQuotaLimit: user.signedInMonthlyQuotaLimit
             )
             return true
         } catch {
@@ -698,7 +844,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 displayName: user.displayName,
                 preferences: user.preferences,
                 authProviders: user.authProviders,
-                avatarURL: publicURL
+                avatarURL: publicURL,
+                isProSubscriber: user.isProSubscriber,
+                analysisQuotaRemaining: user.analysisQuotaRemaining,
+                analysisQuotaMonth: user.analysisQuotaMonth,
+                signedInMonthlyQuotaLimit: user.signedInMonthlyQuotaLimit
             )
             return true
         } catch {
@@ -738,7 +888,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 userId: user.id,
                 history: history
             )
-            let points = (entry.source == .photo && entry.recyclable) ? 1 : 0
+            let points = carbonLeaderboardPoints(for: entry)
             let payload = ImpactPayload(
                 user_id: user.id,
                 item_key: ImpactKey.itemKey(item: entry.item, material: entry.material, bin: entry.bin),
@@ -755,9 +905,8 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 source: entry.source.rawValue
             )
 
-            do {
-                _ = try await supabase.insertImpact(payload: payload, accessToken: accessToken)
-            } catch {
+            let synced = await self.insertImpactWithRetry(payload: payload, accessToken: accessToken, supabase: supabase)
+            if !synced {
                 self.errorMessage = "Sync failed. Try again."
             }
         }
@@ -770,21 +919,15 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             guard let accessToken = await ensureValidSession() else { return }
             guard let user = user else { return }
 
-            var submittedKeys = Set<String>()
-            for entry in entries {
-                // De-dupe per user + item + day (not just item), matching the upsert conflict target.
-                let key = "\(user.id)|\(ImpactKey.dayKey(for: entry.date))|\(ImpactKey.itemKey(item: entry.item, material: entry.material, bin: entry.bin))"
-                if submittedKeys.contains(key) {
-                    continue
-                }
-                submittedKeys.insert(key)
+            var hadFailure = false
+            for entry in bestEntriesForSync(entries) {
                 let imagePath = await self.uploadImpactImageIfNeeded(
                     entry: entry,
                     accessToken: accessToken,
                     userId: user.id,
                     history: history
                 )
-                let points = (entry.source == .photo && entry.recyclable) ? 1 : 0
+                let points = carbonLeaderboardPoints(for: entry)
                 let payload = ImpactPayload(
                     user_id: user.id,
                     item_key: ImpactKey.itemKey(item: entry.item, material: entry.material, bin: entry.bin),
@@ -800,15 +943,60 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                     image_path: imagePath,
                     source: entry.source.rawValue
                 )
-                do {
-                    _ = try await supabase.insertImpact(payload: payload, accessToken: accessToken)
-                } catch {
-                    self.errorMessage = "Sync failed. Try again."
-                    break
+                let synced = await self.insertImpactWithRetry(payload: payload, accessToken: accessToken, supabase: supabase)
+                if !synced {
+                    hadFailure = true
                 }
+            }
+            if hadFailure {
+                self.errorMessage = "Some impact entries failed to sync. Try again."
             }
             await self.loadUserAndProfile()
         }
+    }
+
+    private func bestEntriesForSync(_ entries: [HistoryEntry]) -> [HistoryEntry] {
+        var bestByKey: [String: HistoryEntry] = [:]
+        for candidate in entries {
+            let key = "\(ImpactKey.dayKey(for: candidate.date))|\(ImpactKey.itemKey(item: candidate.item, material: candidate.material, bin: candidate.bin))"
+            if let existing = bestByKey[key] {
+                bestByKey[key] = preferredSyncEntry(existing, candidate)
+            } else {
+                bestByKey[key] = candidate
+            }
+        }
+        return bestByKey.values.sorted { $0.date > $1.date }
+    }
+
+    private func carbonLeaderboardPoints(for entry: HistoryEntry) -> Int {
+        guard entry.recyclable, entry.recycleStatus == .recycled else { return 0 }
+        let grams = Int((max(0, entry.carbonSavedKg) * 1000).rounded())
+        return max(1, grams)
+    }
+
+    private func preferredSyncEntry(_ lhs: HistoryEntry, _ rhs: HistoryEntry) -> HistoryEntry {
+        let lhsStatusRank = lhs.recycleStatus == .recycled ? 1 : 0
+        let rhsStatusRank = rhs.recycleStatus == .recycled ? 1 : 0
+        if lhsStatusRank != rhsStatusRank {
+            return lhsStatusRank > rhsStatusRank ? lhs : rhs
+        }
+        let lhsSourceRank = lhs.source == .photo ? 1 : 0
+        let rhsSourceRank = rhs.source == .photo ? 1 : 0
+        if lhsSourceRank != rhsSourceRank {
+            return lhsSourceRank > rhsSourceRank ? lhs : rhs
+        }
+        if lhs.scanCount != rhs.scanCount {
+            return lhs.scanCount > rhs.scanCount ? lhs : rhs
+        }
+        if lhs.date != rhs.date {
+            return lhs.date > rhs.date ? lhs : rhs
+        }
+        let lhsHasImage = lhs.localImagePath != nil || lhs.remoteImagePath != nil
+        let rhsHasImage = rhs.localImagePath != nil || rhs.remoteImagePath != nil
+        if lhsHasImage != rhsHasImage {
+            return lhsHasImage ? lhs : rhs
+        }
+        return lhs
     }
 
     func refreshImpactFromServer(history: HistoryStore, limit: Int = 500) async {
@@ -824,11 +1012,20 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
     }
 
+    func accessTokenForAPI() async -> String? {
+        await ensureValidSession()
+    }
+
+    func refreshSignedInUserState() async {
+        await loadUserAndProfile()
+    }
+
     private func restoreSession() {
         guard let data = KeychainStore.read(service: sessionKey, account: "default"),
               let stored = try? JSONDecoder().decode(SupabaseSession.self, from: data)
         else { return }
         session = stored
+        didResolveSubscriptionState = false
         needsProfileRefresh = true
         if supabase != nil {
             needsProfileRefresh = false
@@ -849,6 +1046,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         errorMessage = nil
         isAdmin = false
         guestQuota = nil
+        clearSignedInQuotaState()
         _ = KeychainStore.delete(service: sessionKey, account: "default")
     }
 
@@ -872,14 +1070,25 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     }
 
     private func loadUserAndProfile() async {
-        guard let supabase, let accessToken = await ensureValidSession() else { return }
+        if isSignedIn {
+            didResolveSubscriptionState = false
+        }
+        guard let supabase, let accessToken = await ensureValidSession() else {
+            if isSignedIn {
+                didResolveSubscriptionState = true
+            }
+            return
+        }
         let profile: SupabaseUser
         do {
             profile = try await supabase.fetchUser(accessToken: accessToken)
             await MainActor.run { self.user = profile }
             syncPreferencesIfNeeded(remote: profile.preferences)
         } catch {
-            await MainActor.run { self.errorMessage = readableProfileError(error) }
+            await MainActor.run {
+                self.errorMessage = readableProfileError(error)
+                self.didResolveSubscriptionState = true
+            }
             return
         }
 
@@ -894,6 +1103,16 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             await MainActor.run { self.isAdmin = adminProfile?.isAdmin ?? false }
         } catch {
             await MainActor.run { self.isAdmin = false }
+        }
+
+        await MainActor.run {
+            self.applyCloudSubscriptionState(from: profile)
+            let hasDefinitiveSubscriptionState =
+                profile.isProSubscriber != nil ||
+                profile.analysisQuotaRemaining != nil ||
+                profile.signedInMonthlyQuotaLimit != nil ||
+                self.hasActiveSubscription
+            self.didResolveSubscriptionState = hasDefinitiveSubscriptionState
         }
 
         refreshAppSettings()
@@ -923,6 +1142,41 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     ) async -> String? {
         // Photo uploads are disabled for now; keep images local only.
         return nil
+    }
+
+    private func insertImpactWithRetry(
+        payload: ImpactPayload,
+        accessToken: String,
+        supabase: SupabaseService,
+        maxAttempts: Int = 3
+    ) async -> Bool {
+        var lastError: Error?
+        var token = accessToken
+
+        for attempt in 1...maxAttempts {
+            do {
+                _ = try await supabase.insertImpact(payload: payload, accessToken: token)
+                if attempt > 1 {
+                    AuthLog.info("Impact sync recovered after retry attempt \(attempt).")
+                }
+                return true
+            } catch {
+                lastError = error
+                AuthLog.warn("Impact sync attempt \(attempt) failed: \(error.localizedDescription)")
+                if attempt < maxAttempts {
+                    if let refreshed = await ensureValidSession() {
+                        token = refreshed
+                    }
+                    let delayNanos = UInt64(250_000_000 * attempt)
+                    try? await Task.sleep(nanoseconds: delayNanos)
+                }
+            }
+        }
+
+        if let lastError {
+            AuthLog.error("Impact sync failed after retries: \(lastError.localizedDescription)")
+        }
+        return false
     }
 
     private func completeIDTokenSignIn(provider: String, idToken: String, nonce: String?) async {
@@ -1031,6 +1285,12 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         let nsError = error as NSError
         return nsError.domain == ASAuthorizationError.errorDomain &&
             nsError.code == ASAuthorizationError.Code.canceled.rawValue
+    }
+
+    deinit {
+        for token in notificationObservers {
+            NotificationCenter.default.removeObserver(token)
+        }
     }
 
     private func randomNonceString(length: Int = 32) -> String {

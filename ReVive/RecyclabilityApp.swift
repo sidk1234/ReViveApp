@@ -31,7 +31,37 @@ struct ReViveApp: App {
                     authStore.applyConfigIfAvailable()
                 }
                 .onOpenURL { url in
-                    _ = GIDSignIn.sharedInstance.handle(url)
+                    if GIDSignIn.sharedInstance.handle(url) {
+                        return
+                    }
+                    guard url.scheme?.lowercased() == "revive",
+                          url.host?.lowercased() == "billing"
+                    else { return }
+
+                    let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                    let hasCheckoutSession = components?.queryItems?.contains(where: {
+                        $0.name == "session_id" && !($0.value ?? "").isEmpty
+                    }) ?? false
+
+                    Task { @MainActor in
+                        await authStore.refreshSignedInUserState()
+                    }
+
+                    let action = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+                    switch action {
+                    case "success":
+                        if hasCheckoutSession {
+                            NotificationCenter.default.post(name: .reviveBillingSuccess, object: nil)
+                        }
+                    case "cancel", "error", "failed":
+                        if hasCheckoutSession {
+                            NotificationCenter.default.post(name: .reviveBillingError, object: nil)
+                        }
+                    case "return", "portal-return":
+                        break
+                    default:
+                        break
+                    }
                 }
         }
     }

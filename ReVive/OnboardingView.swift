@@ -1,13 +1,14 @@
 import SwiftUI
 
 struct OnboardingView: View {
-    private enum StepsMode: String {
-        case loop = "Loop"
-        case linear = "Flow"
-    }
+    private let tagline = "Earth. One Scan At A Time."
+    private let earthSegmentLength = "Earth.".count
 
     let onContinue: () -> Void
-    @State private var stepsMode: StepsMode = .loop
+    @State private var typedCharacters = 0
+    @State private var showCursor = true
+    @State private var typingTask: Task<Void, Never>?
+    @State private var cursorTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { proxy in
@@ -16,7 +17,7 @@ struct OnboardingView: View {
             let compact = proxy.size.height < 760
             let logoWidth = compact ? min(180, proxy.size.width * 0.50) : min(220, proxy.size.width * 0.58)
             let logoHeight: CGFloat = compact ? 56 : 68
-            let titleSize: CGFloat = compact ? 29 : 34
+            let titleSize: CGFloat = compact ? 24 : 29
             let stepHeight = compact ? proxy.size.height * 0.43 : proxy.size.height * 0.46
 
             ZStack {
@@ -31,30 +32,62 @@ struct OnboardingView: View {
                         .padding(.top, safeTop + (compact ? 8 : 14))
                         .layoutPriority(2)
 
-                    Text("How It Works")
-                        .font(AppType.display(titleSize))
-                        .foregroundStyle(.white)
+                    typewriterTagline(titleSize: titleSize, isCompact: compact)
+                        .padding(.horizontal, 8)
+                        .frame(minHeight: compact ? 38 : 44)
 
-                    stepsModeToggle
-                        .padding(.top, compact ? -8 : -10)
-
-                    recycleSteps(isCompact: compact)
+                    recycleLoopSteps(isCompact: compact)
                         .frame(maxWidth: min(360, proxy.size.width - 32))
                         .frame(height: stepHeight)
                         .padding(.top, compact ? 10 : 14)
 
                     Spacer(minLength: compact ? 4 : 8)
 
+                    let ctaLogoWidth: CGFloat = compact ? 84 : 96
+                    let ctaLogoHeight: CGFloat = compact ? 26 : 30
+                    let ctaEarthSize: CGFloat = compact ? 24 : 26
+                    let ctaContentSpacing: CGFloat = -5
+                    let ctaHorizontalOffset: CGFloat = -10
+                    let ctaEarthVerticalOffset: CGFloat = 3.5
+
                     Button(action: onContinue) {
-                        Text("Get Started")
-                            .font(AppType.title(compact ? 16 : 17))
-                            .foregroundStyle(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, compact ? 12 : 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(AppTheme.mint)
+                        HStack(spacing: ctaContentSpacing) {
+                            Image("LandscapeLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: ctaLogoWidth, height: ctaLogoHeight)
+
+                            (
+                                Text("Earth")
+                                    .foregroundStyle(LinearGradient(
+                                        colors: [Color(red: 0.22, green: 0.75, blue: 0.86),
+                                                 Color(red: 0.92, green: 0.80, blue: 0.27)],
+                                        startPoint: .bottomLeading, endPoint: .trailing))
                             )
+                            .font(AppType.title(ctaEarthSize))
+                            .offset(y: ctaEarthVerticalOffset)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .offset(x: ctaHorizontalOffset)
+                        .padding(.vertical, compact ? 12 : 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.02, green: 0.24, blue: 0.29),
+                                            Color(red: 0.03, green: 0.38, blue: 0.28)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.24), lineWidth: 1)
+                        )
+                        .shadow(color: Color.black.opacity(0.28), radius: 10, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, 24)
@@ -63,194 +96,175 @@ struct OnboardingView: View {
                 .padding(.horizontal, 16)
             }
         }
-    }
-
-    private func recycleSteps(isCompact: Bool) -> some View {
-        Group {
-            switch stepsMode {
-            case .loop:
-                recycleLoopSteps(isCompact: isCompact)
-            case .linear:
-                recycleLinearSteps(isCompact: isCompact)
-            }
+        .onAppear { startTypewriterAnimation(); startCursorBlink() }
+        .onDisappear {
+            typingTask?.cancel(); cursorTask?.cancel()
+            typingTask = nil; cursorTask = nil
         }
     }
+
+    // MARK: - Typewriter
+
+    @ViewBuilder
+    private func typewriterTagline(titleSize: CGFloat, isCompact: Bool) -> some View {
+        let visibleCount = min(typedCharacters, tagline.count)
+        let earthCount   = min(visibleCount, earthSegmentLength)
+        let restCount    = max(0, visibleCount - earthSegmentLength)
+        let earthText    = String(tagline.prefix(earthCount))
+        let restText     = String(tagline.dropFirst(earthSegmentLength).prefix(restCount))
+
+        (Text(earthText)
+            .foregroundStyle(LinearGradient(
+                colors: [Color(red: 0.22, green: 0.75, blue: 0.86),
+                         Color(red: 0.92, green: 0.80, blue: 0.27)],
+                startPoint: .leading, endPoint: .trailing))
+         + Text(restText).foregroundStyle(.white)
+         + Text(showCursor ? "|" : " ").foregroundStyle(.white.opacity(0.95))
+        )
+        .font(AppType.display(titleSize))
+        .lineLimit(1)
+        .minimumScaleFactor(isCompact ? 0.7 : 0.8)
+        .multilineTextAlignment(.center)
+    }
+
+    private func startTypewriterAnimation() {
+        guard typedCharacters == 0, typingTask == nil else { return }
+        typingTask = Task { @MainActor in
+            for count in 0...tagline.count {
+                guard !Task.isCancelled else { break }
+                typedCharacters = count
+                try? await Task.sleep(for: .milliseconds(count == 0 ? 250 : 70))
+            }
+            typingTask = nil
+        }
+    }
+
+    private func startCursorBlink() {
+        guard cursorTask == nil else { return }
+        cursorTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(520))
+                guard !Task.isCancelled else { break }
+                showCursor.toggle()
+            }
+            cursorTask = nil
+        }
+    }
+
+    // MARK: - Loop layout
 
     private func recycleLoopSteps(isCompact: Bool) -> some View {
         GeometryReader { geo in
-            let cardWidth = min(isCompact ? 152 : 178, geo.size.width * 0.46)
-            let cardHeight: CGFloat = isCompact ? 78 : 90
-            let topY = geo.size.height * (isCompact ? 0.25 : 0.24)
-            let bottomY = geo.size.height * (isCompact ? 0.77 : 0.75)
-            let topGapExtra: CGFloat = isCompact ? 22 : 28
-            let baseGap = max(8, geo.size.width - (cardWidth * 2) - 20)
-            let topGap = baseGap + topGapExtra
-            let leftX = (geo.size.width - topGap) / 2 - cardWidth / 2
-            let rightX = (geo.size.width + topGap) / 2 + cardWidth / 2
-            let middleX = geo.size.width / 2
-            let arrowWidth: CGFloat = isCompact ? 11 : 13
-            let topArrowY = topY - cardHeight * (isCompact ? 0.52 : 0.54)
+            let W = geo.size.width
+            let H = geo.size.height
+            let cx = W / 2
+            let cy = H / 2
+
+            let cardWidth:  CGFloat = min(isCompact ? 148 : 168, W * 0.44)
+            let cardHeight: CGFloat = isCompact ? 76 : 88
+
+            // Circle radius — just large enough that cards at 120° apart don't overlap
+            let radius: CGFloat = min(W, H) * (isCompact ? 0.33 : 0.35)
+            let strokeW: CGFloat = isCompact ? 11 : 13
+
+            // Card centres at 120° intervals: top-left, top-right, bottom
+            let a1 = CGFloat(-150) * .pi / 180   // card 1  (top-left)
+            let a2 = CGFloat( -30) * .pi / 180   // card 2  (top-right)
+            let a3 = CGFloat(  90) * .pi / 180   // card 3  (bottom)
+
+            let p1 = CGPoint(x: cx + cos(a1) * radius, y: cy + sin(a1) * radius)
+            let p2 = CGPoint(x: cx + cos(a2) * radius, y: cy + sin(a2) * radius)
+            let p3 = CGPoint(x: cx + cos(a3) * radius, y: cy + sin(a3) * radius)
+
+            // Arrow heads: place them at arc midpoints for 1→2→3→1 flow.
+            let arrowRadius = radius - strokeW * 0.25
+            let arrow1 = CGPoint(x: cx + cos(-90 * .pi / 180) * arrowRadius + 47,
+                                 y: cy + sin(-90 * .pi / 180) * arrowRadius + 5)
+            let arrow2 = CGPoint(x: cx + cos(30 * .pi / 180) * arrowRadius - 12,
+                                 y: cy + sin(30 * .pi / 180) * arrowRadius + 25)
+            let arrow3 = CGPoint(x: cx + cos(150 * .pi / 180) * arrowRadius - 20,
+                                 y: cy + sin(150 * .pi / 180) * arrowRadius - 60)
+            let cut1 = offsetPoint(arrow1, angleDegrees: 35, distance: strokeW * 1.2)
+            let cut2 = offsetPoint(arrow2, angleDegrees: 140, distance: strokeW * 1.2)
+            let cut3 = offsetPoint(arrow3, angleDegrees: 275, distance: strokeW * 1.2)
 
             ZStack {
-                // 1 -> 2
-                connectorArrow(
-                    from: CGPoint(x: leftX - cardWidth * 0.10, y: topY + cardHeight * 0.50),
-                    to: CGPoint(x: middleX - cardWidth * 0.50, y: bottomY - cardHeight * 0.12),
-                    control: CGPoint(x: middleX - cardWidth * 0.90, y: geo.size.height * 0.52),
-                    lineWidth: arrowWidth
-                )
-                .foregroundStyle(Color(red: 0.24, green: 0.75, blue: 0.42))
+                // ── Circle (stroke only) ──
+                Circle()
+                    .stroke(Color(red: 0.24, green: 0.75, blue: 0.42), lineWidth: strokeW)
+                    .frame(width: radius * 2, height: radius * 2)
+                    .position(x: cx, y: cy)
+                    .shadow(color: Color(red: 0.20, green: 0.62, blue: 0.34).opacity(0.25),
+                            radius: 4, x: 0, y: 2)
+                    .overlay {
+                        ZStack {
+                            Circle().frame(width: strokeW * 3.0, height: strokeW * 3.0).position(cut1)
+                            Circle().frame(width: strokeW * 3.8, height: strokeW * 3.8).position(cut2)
+                            Circle().frame(width: strokeW * 3.0, height: strokeW * 3.0).position(cut3)
+                        }
+                        .foregroundStyle(.black)
+                        .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
 
-                // 2 -> 3
-                connectorArrow(
-                    from: CGPoint(x: middleX + cardWidth * 0.50, y: bottomY - cardHeight * 0.12),
-                    to: CGPoint(x: rightX + cardWidth * 0.10, y: topY + cardHeight * 0.50),
-                    control: CGPoint(x: middleX + cardWidth * 0.90, y: geo.size.height * 0.52),
-                    lineWidth: arrowWidth
-                )
-                .foregroundStyle(Color(red: 0.24, green: 0.75, blue: 0.42))
+                // ── Cards (on top of circle) ──
+                stepCard(text: "1) Scan item and analyze.", icon: "viewfinder.circle.fill",
+                         width: cardWidth, height: cardHeight, isCompact: isCompact, iconOnRight: true)
+                    .position(p1)
 
-                // 3 -> 1 (top return arrow)
-                connectorArrow(
-                    from: CGPoint(x: rightX, y: topArrowY),
-                    to: CGPoint(x: leftX, y: topArrowY),
-                    control: CGPoint(x: middleX, y: geo.size.height * (isCompact ? -0.12 : -0.14)),
-                    lineWidth: arrowWidth
-                )
-                .foregroundStyle(Color(red: 0.20, green: 0.69, blue: 0.39))
+                stepCard(text: "2) Recycle", icon: "gift.fill",
+                         width: cardWidth, height: cardHeight, isCompact: isCompact, iconOnRight: true)
+                    .position(p2)
 
-                stepCard(
-                    text: "1) Scan item and analyze.",
-                    icon: "viewfinder.circle.fill",
-                    width: cardWidth,
-                    height: cardHeight,
-                    isCompact: isCompact,
-                    iconOnRight: true
-                )
-                .position(x: leftX, y: topY)
+                stepCard(text: "3) Mark as recycled.", icon: "checkmark.seal.fill",
+                         width: cardWidth, height: cardHeight, isCompact: isCompact, iconOnRight: false)
+                    .position(p3)
 
-                stepCard(
-                    text: "3) Mark as recycled.",
-                    icon: "checkmark.seal.fill",
-                    width: cardWidth,
-                    height: cardHeight,
-                    isCompact: isCompact,
-                    iconOnRight: true
-                )
-                .position(x: rightX, y: topY)
+                // ── Arrow heads on the circle ──
+                // Drawn above cards so they don't appear clipped at overlaps.
+                // Arc 1→2 midpoint: angle -90° (top of circle), travelling rightward
+                arrowHead(strokeW: strokeW)
+                    .rotationEffect(.degrees(35))   // pointing right
+                    .position(arrow1)
+                    .zIndex(2)
 
-                stepCard(
-                    text: "2) Recycle",
-                    icon: "gift.fill",
-                    width: cardWidth,
-                    height: cardHeight,
-                    isCompact: isCompact,
-                    iconOnRight: false
-                )
-                .position(x: middleX, y: bottomY)
+                arrowHead(strokeW: strokeW)
+                    .rotationEffect(.degrees(140))
+                    .position(arrow2)
+                    .zIndex(2)
+
+                arrowHead(strokeW: strokeW)
+                    .rotationEffect(.degrees(275))
+                    .position(arrow3)
+                    .zIndex(2)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private func recycleLinearSteps(isCompact: Bool) -> some View {
-        GeometryReader { geo in
-            let cardWidth = min(isCompact ? 220 : 260, geo.size.width * 0.86)
-            let cardHeight = geo.size.height * (isCompact ? 0.24 : 0.22)
-            let centerX = geo.size.width / 2
-            let card1Y = geo.size.height * (isCompact ? 0.19 : 0.18)
-            let card2Y = geo.size.height * (isCompact ? 0.50 : 0.50)
-            let card3Y = geo.size.height * (isCompact ? 0.81 : 0.82)
-            let arrow1Y = (card1Y + card2Y) / 2
-            let arrow2Y = (card2Y + card3Y) / 2
-
-            ZStack {
-                linearStepCard(
-                    text: "1) Scan item and analyze.",
-                    icon: "viewfinder.circle.fill",
-                    width: cardWidth,
-                    height: cardHeight,
-                    isCompact: isCompact
-                )
-                .position(x: centerX, y: card1Y)
-
-                linearStepCard(
-                    text: "2) Recycle",
-                    icon: "gift.fill",
-                    width: cardWidth,
-                    height: cardHeight,
-                    isCompact: isCompact
-                )
-                .position(x: centerX, y: card2Y)
-
-                linearStepCard(
-                    text: "3) Mark as recycled.",
-                    icon: "checkmark.seal.fill",
-                    width: cardWidth,
-                    height: cardHeight,
-                    isCompact: isCompact
-                )
-                .position(x: centerX, y: card3Y)
-
-                Image(systemName: "arrow.down")
-                    .font(.system(size: isCompact ? 18 : 20, weight: .bold))
-                    .foregroundStyle(Color(red: 0.24, green: 0.75, blue: 0.42))
-                    .position(x: centerX, y: arrow1Y)
-
-                Image(systemName: "arrow.down")
-                    .font(.system(size: isCompact ? 18 : 20, weight: .bold))
-                    .foregroundStyle(Color(red: 0.24, green: 0.75, blue: 0.42))
-                    .position(x: centerX, y: arrow2Y)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+    /// A simple filled arrowhead chevron pointing rightward by default.
+    private func arrowHead(strokeW: CGFloat) -> some View {
+        let size = strokeW * 3.8
+        return Image(systemName: "arrowtriangle.right.fill")
+            .font(.system(size: size))
+            .foregroundStyle(Color(red: 0.24, green: 0.75, blue: 0.42))
     }
 
-    private var stepsModeToggle: some View {
-        HStack(spacing: 6) {
-            modeButton(.loop)
-            modeButton(.linear)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 6)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.white.opacity(0.16))
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+    private func offsetPoint(_ point: CGPoint, angleDegrees: CGFloat, distance: CGFloat) -> CGPoint {
+        let radians = angleDegrees * .pi / 180
+        return CGPoint(
+            x: point.x + cos(radians) * distance,
+            y: point.y + sin(radians) * distance
         )
     }
 
-    private func modeButton(_ mode: StepsMode) -> some View {
-        let selected = stepsMode == mode
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                stepsMode = mode
-            }
-        } label: {
-            Text(mode.rawValue)
-                .font(AppType.title(12))
-                .foregroundStyle(selected ? Color.black : Color.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(selected ? AppTheme.mint : Color.clear)
-                )
-        }
-        .buttonStyle(.plain)
-    }
+    // MARK: - Cards
 
     @ViewBuilder
     private func stepCard(
-        text: String,
-        icon: String,
-        width: CGFloat,
-        height: CGFloat,
-        isCompact: Bool,
-        iconOnRight: Bool
+        text: String, icon: String,
+        width: CGFloat, height: CGFloat,
+        isCompact: Bool, iconOnRight: Bool
     ) -> some View {
         let textBlock = Text(text)
             .font(AppType.title(isCompact ? 12 : 14))
@@ -265,99 +279,19 @@ struct OnboardingView: View {
 
         Group {
             if iconOnRight {
-                HStack(spacing: 10) {
-                    textBlock
-                    Spacer(minLength: 0)
-                    iconBlock
-                }
+                HStack(spacing: 10) { textBlock; Spacer(minLength: 0); iconBlock }
             } else {
-                VStack(spacing: 8) {
-                    textBlock
-                    iconBlock
-                }
+                VStack(spacing: 8) { textBlock; iconBlock }
             }
         }
         .padding(.horizontal, 14)
         .frame(width: width, height: height)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color(red: 0.24, green: 0.63, blue: 0.38), lineWidth: 2.5)
-        )
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .stroke(Color(red: 0.24, green: 0.63, blue: 0.38), lineWidth: 2.5))
         .shadow(color: Color.black.opacity(0.14), radius: 7, x: 0, y: 4)
     }
 
-    private func linearStepCard(
-        text: String,
-        icon: String,
-        width: CGFloat,
-        height: CGFloat,
-        isCompact: Bool
-    ) -> some View {
-        VStack(spacing: isCompact ? 6 : 8) {
-            Text(text)
-                .font(AppType.title(isCompact ? 13 : 15))
-                .foregroundStyle(Color(red: 0.04, green: 0.10, blue: 0.13))
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-                .minimumScaleFactor(0.8)
-
-            Image(systemName: icon)
-                .font(.system(size: isCompact ? 22 : 24, weight: .semibold))
-                .foregroundStyle(Color(red: 0.18, green: 0.60, blue: 0.34))
-        }
-        .padding(.horizontal, isCompact ? 8 : 10)
-        .frame(width: width, height: height)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color(red: 0.24, green: 0.63, blue: 0.38), lineWidth: 2.2)
-        )
-        .shadow(color: Color.black.opacity(0.14), radius: 7, x: 0, y: 4)
-    }
-
-    private func connectorArrow(
-        from start: CGPoint,
-        to end: CGPoint,
-        control: CGPoint,
-        lineWidth: CGFloat
-    ) -> some View {
-        var p = Path()
-        p.move(to: start)
-        p.addQuadCurve(to: end, control: control)
-
-        let tangent = CGVector(dx: end.x - control.x, dy: end.y - control.y)
-        let mag = max(0.001, sqrt(tangent.dx * tangent.dx + tangent.dy * tangent.dy))
-        let back = CGVector(dx: -tangent.dx / mag, dy: -tangent.dy / mag)
-        let wingLen = lineWidth * 1.55
-        let wingAngle = CGFloat.pi / 5
-
-        let a = rotate(back, by: wingAngle)
-        let b = rotate(back, by: -wingAngle)
-        let pa = CGPoint(x: end.x + a.dx * wingLen, y: end.y + a.dy * wingLen)
-        let pb = CGPoint(x: end.x + b.dx * wingLen, y: end.y + b.dy * wingLen)
-
-        p.move(to: end)
-        p.addLine(to: pa)
-        p.move(to: end)
-        p.addLine(to: pb)
-
-        return p
-            .stroke(style: .init(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
-            .shadow(color: Color(red: 0.20, green: 0.62, blue: 0.34).opacity(0.25), radius: 3, x: 0, y: 2)
-    }
-
-    private func rotate(_ v: CGVector, by a: CGFloat) -> CGVector {
-        let c = cos(a)
-        let s = sin(a)
-        return CGVector(dx: v.dx * c - v.dy * s, dy: v.dx * s + v.dy * c)
-    }
 }
 
 #Preview {

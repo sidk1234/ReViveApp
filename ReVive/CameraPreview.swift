@@ -18,6 +18,10 @@ struct CameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewUIView, context: Context) {
+        if uiView.previewLayer.session !== session {
+            uiView.previewLayer.session = session
+        }
+        uiView.previewLayer.videoGravity = .resizeAspectFill
     }
 }
 
@@ -37,4 +41,3 @@ final class PreviewUIView: UIView {
         previewLayer.frame = bounds
     }
 }
-

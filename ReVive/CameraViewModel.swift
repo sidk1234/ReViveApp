@@ -28,9 +28,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     @Published var hapticsEnabled: Bool = true
     @Published var zoomFactor: CGFloat = 1.0
 
-    private let maxZoomLimit: CGFloat = 5.0
+    private var latestAnalysisRequestID = UUID()
+
+    private let maxZoomLimit: CGFloat = 10.0
     private var minZoomFactor: CGFloat = 1.0
-    private var maxZoomFactor: CGFloat = 5.0
+    private var maxZoomFactor: CGFloat = 10.0
     
     //MARK: - OpenAI
     private let openAI = OpenAIResponsesClient()
@@ -213,10 +215,13 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
     
     @MainActor
-    func sendSelectionToOpenAI(prompt: String, useWebSearch: Bool, accessToken: String?) {
+    func sendSelectionToOpenAI(location: LocationContext, accessToken: String?) {
         guard isSelected else { return }
+        let requestID = UUID()
+        latestAnalysisRequestID = requestID
 
         let cutoutImage = makeSelectedSubjectCutout()
+        // Keep full-frame as primary for robust identification, with cutout as optional context.
         let imageToSend: UIImage? = capturedImage ?? cutoutImage
         let contextImage = (cutoutImage == nil || capturedImage == nil) ? nil : cutoutImage
 
@@ -230,41 +235,28 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         Task {
             do {
                 let text = try await analyzeImageWithRetry(
-                    prompt: prompt,
                     image: imageToSend,
                     contextImage: contextImage,
-                    useWebSearch: useWebSearch,
+                    itemText: nil,
+                    location: location,
                     accessToken: accessToken
                 )
-                if let parsed = self.parseResponse(text) {
-                    await MainActor.run {
-                        self.aiResultText = text
+                let parsed = self.parseResponse(text)
+                await MainActor.run {
+                    guard self.latestAnalysisRequestID == requestID else { return }
+                    self.aiResultText = text
+                    if let parsed {
                         self.aiParsedResult = parsed
                         self.aiErrorText = nil
-                        self.aiIsLoading = false
+                    } else {
+                        self.aiParsedResult = nil
+                        self.aiErrorText = "Couldn't parse response. Please try again."
                     }
-                } else {
-                    let retryText = try await analyzeImageWithRetry(
-                        prompt: prompt,
-                        image: imageToSend,
-                        contextImage: contextImage,
-                        useWebSearch: useWebSearch,
-                        accessToken: accessToken
-                    )
-                    await MainActor.run {
-                        self.aiResultText = retryText
-                        if let parsed = self.parseResponse(retryText) {
-                            self.aiParsedResult = parsed
-                            self.aiErrorText = nil
-                        } else {
-                            self.aiParsedResult = nil
-                            self.aiErrorText = "Couldn't parse response. Please try again."
-                        }
-                        self.aiIsLoading = false
-                    }
+                    self.aiIsLoading = false
                 }
             } catch {
                 await MainActor.run {
+                    guard self.latestAnalysisRequestID == requestID else { return }
                     self.aiErrorText = error.localizedDescription
                     self.aiParsedResult = nil
                     self.aiIsLoading = false
@@ -278,9 +270,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
 
     @MainActor
-    func sendTextToOpenAI(prompt: String, itemText: String, useWebSearch: Bool, accessToken: String?) {
+    func sendTextToOpenAI(itemText: String, location: LocationContext, accessToken: String?) {
         let trimmed = itemText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let requestID = UUID()
+        latestAnalysisRequestID = requestID
 
         aiIsLoading = true
         aiErrorText = nil
@@ -290,37 +284,26 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         Task {
             do {
                 let text = try await analyzeTextWithRetry(
-                    prompt: prompt,
-                    useWebSearch: useWebSearch,
+                    itemText: trimmed,
+                    location: location,
                     accessToken: accessToken
                 )
-                if let parsed = self.parseResponse(text) {
-                    await MainActor.run {
-                        self.aiResultText = text
+                let parsed = self.parseResponse(text)
+                await MainActor.run {
+                    guard self.latestAnalysisRequestID == requestID else { return }
+                    self.aiResultText = text
+                    if let parsed {
                         self.aiParsedResult = parsed
                         self.aiErrorText = nil
-                        self.aiIsLoading = false
+                    } else {
+                        self.aiParsedResult = nil
+                        self.aiErrorText = "Couldn't parse response. Please try again."
                     }
-                } else {
-                    let retryText = try await analyzeTextWithRetry(
-                        prompt: prompt,
-                        useWebSearch: useWebSearch,
-                        accessToken: accessToken
-                    )
-                    await MainActor.run {
-                        self.aiResultText = retryText
-                        if let parsed = self.parseResponse(retryText) {
-                            self.aiParsedResult = parsed
-                            self.aiErrorText = nil
-                        } else {
-                            self.aiParsedResult = nil
-                            self.aiErrorText = "Couldn't parse response. Please try again."
-                        }
-                        self.aiIsLoading = false
-                    }
+                    self.aiIsLoading = false
                 }
             } catch {
                 await MainActor.run {
+                    guard self.latestAnalysisRequestID == requestID else { return }
                     self.aiErrorText = error.localizedDescription
                     self.aiParsedResult = nil
                     self.aiIsLoading = false
@@ -706,72 +689,55 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     // MARK: - Response parsing
     private func parseResponse(_ text: String) -> AIRecyclingResult? {
         if let decoded = decodeResult(from: text) {
-            return sanitizeResult(decoded)
+            return sanitizeResult(decoded, fallbackText: text)
         }
         if let extracted = extractJSONCandidate(from: text),
            let decoded = decodeResult(from: extracted) {
-            return sanitizeResult(decoded)
+            return sanitizeResult(decoded, fallbackText: text)
         }
-        guard let parsed = parseKeyValueResponse(text) else { return nil }
-        return sanitizeResult(parsed)
+        if let parsed = parseKeyValueResponse(text) {
+            return sanitizeResult(parsed, fallbackText: text)
+        }
+        if let rescued = parseLooseResponse(text) {
+            return sanitizeResult(rescued, fallbackText: text)
+        }
+        let fallback = AIRecyclingResult(
+            item: "unknown",
+            material: "unknown",
+            recyclable: false,
+            bin: "unknown",
+            notes: "No special prep.",
+            carbonSavedKg: 0
+        )
+        return sanitizeResult(fallback, fallbackText: text)
     }
 
     private func analyzeImageWithRetry(
-        prompt: String,
         image: UIImage,
         contextImage: UIImage?,
-        useWebSearch: Bool,
+        itemText: String?,
+        location: LocationContext,
         accessToken: String?
     ) async throws -> String {
-        do {
-            return try await openAI.analyzeImage(
-                prompt: prompt,
-                image: image,
-                contextImage: contextImage,
-                maxOutputTokens: 400,
-                useWebSearch: useWebSearch,
-                accessToken: accessToken
-            )
-        } catch let error as OpenAIResponsesClient.OpenAIError {
-            if case .noTextReturned = error {
-                try await Task.sleep(nanoseconds: 400_000_000)
-                return try await openAI.analyzeImage(
-                    prompt: prompt,
-                    image: image,
-                    contextImage: contextImage,
-                    maxOutputTokens: 400,
-                    useWebSearch: useWebSearch,
-                    accessToken: accessToken
-                )
-            }
-            throw error
-        }
+        return try await openAI.analyzeImage(
+            image: image,
+            contextImage: contextImage,
+            itemText: itemText,
+            location: location,
+            accessToken: accessToken
+        )
     }
 
     private func analyzeTextWithRetry(
-        prompt: String,
-        useWebSearch: Bool,
+        itemText: String,
+        location: LocationContext,
         accessToken: String?
     ) async throws -> String {
-        do {
-            return try await openAI.analyzeText(
-                prompt: prompt,
-                maxOutputTokens: 400,
-                useWebSearch: useWebSearch,
-                accessToken: accessToken
-            )
-        } catch let error as OpenAIResponsesClient.OpenAIError {
-            if case .noTextReturned = error {
-                try await Task.sleep(nanoseconds: 400_000_000)
-                return try await openAI.analyzeText(
-                    prompt: prompt,
-                    maxOutputTokens: 400,
-                    useWebSearch: useWebSearch,
-                    accessToken: accessToken
-                )
-            }
-            throw error
-        }
+        return try await openAI.analyzeText(
+            itemText: itemText,
+            location: location,
+            accessToken: accessToken
+        )
     }
 
     private func decodeResult(from text: String) -> AIRecyclingResult? {
@@ -787,67 +753,103 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
         let object: [String: Any]?
         if let dict = json as? [String: Any] {
-            object = dict
+            object = flattenTopLevel(dict)
         } else if let array = json as? [[String: Any]] {
-            object = array.first
+            object = array.first.map(flattenTopLevel)
         } else {
             object = nil
         }
 
         guard let object else { return nil }
 
-        func stringValue(_ key: String) -> String? {
-            if let value = object[key] as? String { return value }
-            if let value = object[key.lowercased()] as? String { return value }
-            if let value = object[key.uppercased()] as? String { return value }
+        func stringValue(_ keys: [String]) -> String? {
+            for key in keys {
+                if let value = normalizedString(from: object[key]) { return value }
+                if let value = normalizedString(from: object[key.lowercased()]) { return value }
+                if let value = normalizedString(from: object[key.uppercased()]) { return value }
+            }
             return nil
         }
 
-        func boolValue(_ key: String) -> Bool? {
-            if let value = object[key] as? Bool { return value }
-            if let value = object[key.lowercased()] as? Bool { return value }
-            if let value = object[key.uppercased()] as? Bool { return value }
-            if let str = stringValue(key)?.lowercased() {
+        func boolValue(_ keys: [String]) -> Bool? {
+            for key in keys {
+                if let value = object[key] as? Bool { return value }
+                if let value = object[key.lowercased()] as? Bool { return value }
+                if let value = object[key.uppercased()] as? Bool { return value }
+                if let num = object[key] as? NSNumber { return num.boolValue }
+                if let num = object[key.lowercased()] as? NSNumber { return num.boolValue }
+                if let num = object[key.uppercased()] as? NSNumber { return num.boolValue }
+            }
+            if let str = stringValue(keys)?.lowercased() {
                 if str.contains("yes") || str.contains("true") || str.contains("recyclable") { return true }
                 if str.contains("no") || str.contains("false") || str.contains("not recyclable") { return false }
             }
-            if let num = object[key] as? NSNumber { return num.boolValue }
-            if let num = object[key.lowercased()] as? NSNumber { return num.boolValue }
-            if let num = object[key.uppercased()] as? NSNumber { return num.boolValue }
             return nil
         }
 
-        let item = stringValue("item") ?? "unknown"
-        let material = stringValue("material") ?? "unknown"
-        let notes = stringValue("notes") ?? ""
-        let bin = stringValue("bin") ?? stringValue("disposal") ?? stringValue("destination") ?? "unknown"
-        let recyclable = boolValue("recyclable") ?? inferRecyclable(from: bin)
+        func doubleValue(_ keys: [String]) -> Double? {
+            for key in keys {
+                if let value = normalizedDouble(from: object[key]) {
+                    return max(0, value)
+                }
+                if let value = normalizedDouble(from: object[key.lowercased()]) {
+                    return max(0, value)
+                }
+                if let value = normalizedDouble(from: object[key.uppercased()]) {
+                    return max(0, value)
+                }
+            }
+            return nil
+        }
+
+        let item = stringValue(["item", "item_name", "product", "name", "object", "category"]) ?? "unknown"
+        let material = stringValue(["material", "primary_material", "composition"]) ?? "unknown"
+        let notes = stringValue(["notes", "prep", "preparation", "instructions"]) ?? ""
+        let bin = stringValue(["bin", "disposal", "destination", "where_to_put", "container"]) ?? "unknown"
+        let recyclable = boolValue(["recyclable", "is_recyclable", "accepted"]) ?? inferRecyclable(from: bin)
+        let carbonSavedKg = doubleValue([
+            "carbonSavedKg",
+            "carbon_saved_kg",
+            "carbon_kg",
+            "co2_saved_kg",
+            "co2e_saved_kg",
+            "carbon",
+            "co2_saved",
+        ]) ?? 0
 
         if item == "unknown", material == "unknown", bin == "unknown", notes.isEmpty {
             return nil
         }
 
-        return AIRecyclingResult(item: item, material: material, recyclable: recyclable, bin: bin, notes: notes)
+        return AIRecyclingResult(
+            item: item,
+            material: material,
+            recyclable: recyclable,
+            bin: bin,
+            notes: notes,
+            carbonSavedKg: carbonSavedKg
+        )
     }
 
     private func parseKeyValueResponse(_ text: String) -> AIRecyclingResult? {
         let map = extractKeyValueMap(from: text)
 
-        let item = map["ITEM"] ?? "unknown"
-        let material = map["MATERIAL"] ?? "unknown"
-        let notes = map["NOTES"] ?? ""
-        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? "unknown"
+        let item = map["ITEM"] ?? map["PRODUCT"] ?? map["NAME"] ?? map["OBJECT"] ?? "unknown"
+        let material = map["MATERIAL"] ?? map["PRIMARY_MATERIAL"] ?? "unknown"
+        let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? ""
+        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? "unknown"
+        let carbonSavedKg = parseCarbonValue(
+            map["CARBON_SAVED_KG"] ??
+            map["CARBON_KG"] ??
+            map["CO2_SAVED_KG"] ??
+            map["CO2E_SAVED_KG"] ??
+            map["CARBON"] ??
+            map["CO2_SAVED"]
+        ) ?? 0
 
         let recyclable: Bool
         if let recyclableRaw = map["RECYCLABLE"] {
-            let lower = recyclableRaw.lowercased()
-            if lower.contains("no") || lower.contains("false") || lower.contains("not recyclable") {
-                recyclable = false
-            } else if lower.contains("yes") || lower.contains("true") || lower.contains("recyclable") {
-                recyclable = true
-            } else {
-                recyclable = inferRecyclable(from: bin)
-            }
+            recyclable = parseRecyclableString(recyclableRaw) ?? inferRecyclable(from: bin)
         } else {
             recyclable = inferRecyclable(from: bin)
         }
@@ -856,13 +858,27 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             return nil
         }
 
-        return AIRecyclingResult(item: item, material: material, recyclable: recyclable, bin: bin, notes: notes)
+        return AIRecyclingResult(
+            item: item,
+            material: material,
+            recyclable: recyclable,
+            bin: bin,
+            notes: notes,
+            carbonSavedKg: carbonSavedKg
+        )
     }
 
     private func extractKeyValueMap(from text: String) -> [String: String] {
         let normalized = text.replacingOccurrences(of: "\r", with: "\n")
         var map: [String: String] = [:]
-        let fields = ["NOTES", "ITEM", "MATERIAL", "RECYCLABLE", "BIN", "DISPOSAL", "DESTINATION"]
+        let fields = [
+            "NOTES", "PREP", "INSTRUCTIONS",
+            "ITEM", "PRODUCT", "NAME", "OBJECT",
+            "MATERIAL", "PRIMARY_MATERIAL",
+            "RECYCLABLE",
+            "BIN", "DISPOSAL", "DESTINATION", "WHERE_TO_PUT",
+            "CARBON_SAVED_KG", "CARBON_KG", "CO2_SAVED_KG", "CO2E_SAVED_KG", "CARBON", "CO2_SAVED"
+        ]
         let fieldsPattern = fields.joined(separator: "|")
 
         for field in fields {
@@ -904,6 +920,35 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         return map
     }
 
+    private func parseLooseResponse(_ text: String) -> AIRecyclingResult? {
+        let map = extractKeyValueMap(from: text)
+        let item = map["ITEM"] ?? map["PRODUCT"] ?? map["NAME"] ?? map["OBJECT"] ?? "unknown"
+        let material = map["MATERIAL"] ?? map["PRIMARY_MATERIAL"] ?? "unknown"
+        let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? ""
+        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? "unknown"
+        let recyclable = (map["RECYCLABLE"].flatMap(parseRecyclableString)) ?? inferRecyclable(from: bin)
+        let carbonSavedKg = parseCarbonValue(
+            map["CARBON_SAVED_KG"] ??
+            map["CARBON_KG"] ??
+            map["CO2_SAVED_KG"] ??
+            map["CO2E_SAVED_KG"] ??
+            map["CARBON"] ??
+            map["CO2_SAVED"]
+        ) ?? 0
+
+        if item == "unknown", material == "unknown", bin == "unknown", notes.isEmpty {
+            return nil
+        }
+        return AIRecyclingResult(
+            item: item,
+            material: material,
+            recyclable: recyclable,
+            bin: bin,
+            notes: notes,
+            carbonSavedKg: carbonSavedKg
+        )
+    }
+
     private func inferRecyclable(from bin: String) -> Bool {
         let lower = bin.lowercased()
         if lower.contains("trash") || lower.contains("landfill") || lower.contains("garbage") {
@@ -914,6 +959,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         }
         return false
     }
+
 
     private func extractJSONCandidate(from text: String) -> String? {
         let cleaned = text
@@ -936,18 +982,41 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         return String(text[start...end])
     }
 
-    private func sanitizeResult(_ result: AIRecyclingResult) -> AIRecyclingResult {
-        AIRecyclingResult(
-            item: sanitizeOutputValue(result.item),
-            material: sanitizeOutputValue(result.material),
-            recyclable: result.recyclable,
-            bin: sanitizeOutputValue(result.bin),
-            notes: sanitizeOutputValue(result.notes)
+    private func sanitizeResult(_ result: AIRecyclingResult, fallbackText: String) -> AIRecyclingResult {
+        let fallbackMap = extractKeyValueMap(from: fallbackText)
+        let fallbackItem = fallbackMap["ITEM"] ?? fallbackMap["PRODUCT"] ?? fallbackMap["NAME"] ?? fallbackMap["OBJECT"]
+        let fallbackMaterial = fallbackMap["MATERIAL"] ?? fallbackMap["PRIMARY_MATERIAL"]
+        let fallbackBin = fallbackMap["BIN"] ?? fallbackMap["DISPOSAL"] ?? fallbackMap["DESTINATION"] ?? fallbackMap["WHERE_TO_PUT"]
+        let fallbackNotes = fallbackMap["NOTES"] ?? fallbackMap["PREP"] ?? fallbackMap["INSTRUCTIONS"]
+        let fallbackCarbon = fallbackMap["CARBON_SAVED_KG"]
+            ?? fallbackMap["CARBON_KG"]
+            ?? fallbackMap["CO2_SAVED_KG"]
+            ?? fallbackMap["CO2E_SAVED_KG"]
+            ?? fallbackMap["CARBON"]
+            ?? fallbackMap["CO2_SAVED"]
+
+        let sanitizedItem = sanitizedField(primary: result.item, fallback: fallbackItem, defaultValue: "unknown", avoidUnknownIfPossible: true)
+        let sanitizedMaterial = sanitizedField(primary: result.material, fallback: fallbackMaterial, defaultValue: "unknown", avoidUnknownIfPossible: false)
+        let sanitizedBin = sanitizedField(primary: result.bin, fallback: fallbackBin, defaultValue: "unknown", avoidUnknownIfPossible: false)
+        let sanitizedNotes = sanitizedField(primary: result.notes, fallback: fallbackNotes, defaultValue: "No special prep.", avoidUnknownIfPossible: false)
+        let itemUnknown = sanitizedItem.lowercased() == "unknown"
+        let sanitizedRecyclable = itemUnknown ? false : result.recyclable
+        let sanitizedCarbonValue = sanitizedRecyclable ? sanitizedCarbon(primary: result.carbonSavedKg, fallback: fallbackCarbon) : 0
+
+        return AIRecyclingResult(
+            item: sanitizedItem,
+            material: sanitizedMaterial,
+            recyclable: sanitizedRecyclable,
+            bin: sanitizedBin,
+            notes: sanitizedNotes,
+            carbonSavedKg: sanitizedCarbonValue
         )
     }
 
     private func sanitizeOutputValue(_ value: String) -> String {
         var text = value
+        text = text.replacingOccurrences(of: "^[\"'`\\s]+|[\"'`\\s]+$", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)^(item|product|name|object|material|notes|prep|instructions|bin|disposal|destination|recyclable)\\s*[:=\\-]\\s*", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\[[^\\]]*\\]", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "https?://\\S+", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "www\\.\\S+", with: "", options: .regularExpression)
@@ -958,8 +1027,138 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         text = text.replacingOccurrences(of: "(?i)consult (your )?local program", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\(\\(\\s*$", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\(\\s*$", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: "  ", with: " ")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func sanitizedField(
+        primary: String,
+        fallback: String?,
+        defaultValue: String,
+        avoidUnknownIfPossible: Bool
+    ) -> String {
+        let primaryClean = canonicalizeUnknownToken(sanitizeOutputValue(primary))
+        if !primaryClean.isEmpty, !(avoidUnknownIfPossible && primaryClean == "unknown") {
+            return primaryClean
+        }
+        if let fallback {
+            let fallbackClean = canonicalizeUnknownToken(sanitizeOutputValue(fallback))
+            if !fallbackClean.isEmpty, !(avoidUnknownIfPossible && fallbackClean == "unknown") {
+                return fallbackClean
+            }
+        }
+        return defaultValue
+    }
+
+    private func canonicalizeUnknownToken(_ value: String) -> String {
+        let normalized = value.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let unknownTokens: Set<String> = ["unknown", "unkown", "unknow", "unknwon", "unknowm", "n/a", "na", "none"]
+        if unknownTokens.contains(normalized) {
+            return "unknown"
+        }
+        return value
+    }
+
+    private func parseRecyclableString(_ value: String) -> Bool? {
+        let lower = value.lowercased()
+        if lower.contains("no") || lower.contains("false") || lower.contains("not recyclable") {
+            return false
+        }
+        if lower.contains("yes") || lower.contains("true") || lower.contains("recyclable") {
+            return true
+        }
+        return nil
+    }
+
+    private func parseCarbonValue(_ value: String?) -> Double? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let direct = Double(trimmed) {
+            return max(0, direct)
+        }
+        let pattern = "(-?\\d+(?:\\.\\d+)?)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        guard
+            let match = regex.firstMatch(in: trimmed, options: [], range: range),
+            let valueRange = Range(match.range(at: 1), in: trimmed),
+            let parsed = Double(trimmed[valueRange])
+        else {
+            return nil
+        }
+        return max(0, parsed)
+    }
+
+    private func sanitizedCarbon(primary: Double, fallback: String?) -> Double {
+        if primary.isFinite, primary > 0 {
+            return primary
+        }
+        if let fallbackParsed = parseCarbonValue(fallback) {
+            return fallbackParsed
+        }
+        return 0
+    }
+
+    private func normalizedString(from raw: Any?) -> String? {
+        guard let raw else { return nil }
+        if let str = raw as? String {
+            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let num = raw as? NSNumber {
+            return num.stringValue
+        }
+        if let arr = raw as? [Any] {
+            for element in arr {
+                if let value = normalizedString(from: element) {
+                    return value
+                }
+            }
+            return nil
+        }
+        if let dict = raw as? [String: Any] {
+            for key in ["value", "text", "content", "label", "name", "item", "material", "bin", "notes"] {
+                if let value = normalizedString(from: dict[key]) {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    private func normalizedDouble(from raw: Any?) -> Double? {
+        guard let raw else { return nil }
+        if let value = raw as? Double {
+            return value
+        }
+        if let value = raw as? NSNumber {
+            return value.doubleValue
+        }
+        if let value = raw as? String {
+            return parseCarbonValue(value)
+        }
+        if let dict = raw as? [String: Any] {
+            for key in ["value", "text", "content", "label", "carbon", "carbonSavedKg", "carbon_saved_kg"] {
+                if let nested = normalizedDouble(from: dict[key]) {
+                    return nested
+                }
+            }
+        }
+        return nil
+    }
+
+    private func flattenTopLevel(_ dict: [String: Any]) -> [String: Any] {
+        var output = dict
+        for key in ["result", "output", "response", "data", "analysis"] {
+            if let nested = dict[key] as? [String: Any] {
+                for (nestedKey, nestedValue) in nested where output[nestedKey] == nil {
+                    output[nestedKey] = nestedValue
+                }
+            }
+        }
+        return output
     }
 }
 
@@ -969,6 +1168,68 @@ struct AIRecyclingResult: Codable, Equatable {
     let recyclable: Bool
     let bin: String
     let notes: String
+    let carbonSavedKg: Double
+
+    init(
+        item: String,
+        material: String,
+        recyclable: Bool,
+        bin: String,
+        notes: String,
+        carbonSavedKg: Double = 0
+    ) {
+        self.item = item
+        self.material = material
+        self.recyclable = recyclable
+        self.bin = bin
+        self.notes = notes
+        self.carbonSavedKg = max(0, carbonSavedKg)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case item
+        case material
+        case recyclable
+        case bin
+        case notes
+        case carbonSavedKg
+        case carbon_saved_kg
+        case carbon_kg
+        case co2_saved_kg
+        case co2e_saved_kg
+        case carbon
+        case co2_saved
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        item = try container.decode(String.self, forKey: .item)
+        material = try container.decode(String.self, forKey: .material)
+        recyclable = try container.decode(Bool.self, forKey: .recyclable)
+        bin = try container.decode(String.self, forKey: .bin)
+        notes = try container.decode(String.self, forKey: .notes)
+
+        let carbonCandidates: [Double?] = [
+            try? container.decode(Double.self, forKey: .carbonSavedKg),
+            try? container.decode(Double.self, forKey: .carbon_saved_kg),
+            try? container.decode(Double.self, forKey: .carbon_kg),
+            try? container.decode(Double.self, forKey: .co2_saved_kg),
+            try? container.decode(Double.self, forKey: .co2e_saved_kg),
+            try? container.decode(Double.self, forKey: .carbon),
+            try? container.decode(Double.self, forKey: .co2_saved),
+        ]
+        carbonSavedKg = max(0, carbonCandidates.compactMap { $0 }.first ?? 0)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(item, forKey: .item)
+        try container.encode(material, forKey: .material)
+        try container.encode(recyclable, forKey: .recyclable)
+        try container.encode(bin, forKey: .bin)
+        try container.encode(notes, forKey: .notes)
+        try container.encode(max(0, carbonSavedKg), forKey: .carbonSavedKg)
+    }
 }
 
 // MARK: - UIImage normalization

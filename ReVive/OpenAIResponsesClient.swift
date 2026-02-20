@@ -9,6 +9,13 @@
 import Foundation
 import UIKit
 
+struct SignedInQuotaUpdate {
+    let remaining: Int?
+    let limit: Int
+    let isPro: Bool?
+    let monthKey: String?
+}
+
 // Minimal client for the Supabase Edge proxy
 final class OpenAIResponsesClient {
     private var edgeOpenAIURL: URL? {
@@ -16,17 +23,17 @@ final class OpenAIResponsesClient {
         return base.appendingPathComponent("functions/v1/revive")
     }
 
-    private let imageModel = "gpt-4o-mini"
-    private let textModel = "gpt-4o-mini-search-preview"
-
     struct ProxyRequest: Encodable {
         let mode: String
-        let model: String
-        let prompt: String
         let image: String?
         let contextImage: String?
-        let maxOutputTokens: Int?
-        let useWebSearch: Bool?
+        let itemText: String?
+        let latitude: Double?
+        let longitude: Double?
+        let locality: String?
+        let administrativeArea: String?
+        let postalCode: String?
+        let countryCode: String?
         let deviceId: String?
     }
 
@@ -51,31 +58,33 @@ final class OpenAIResponsesClient {
     }
 
     func analyzeImage(
-        prompt: String,
         image: UIImage,
         contextImage: UIImage? = nil,
-        maxOutputTokens: Int = 300,
-        useWebSearch: Bool = false,
+        itemText: String? = nil,
+        location: LocationContext?,
         accessToken: String?
     ) async throws -> String {
 
         guard let url = edgeOpenAIURL else { throw OpenAIError.invalidURL }
         let anonKey = SupabaseConfig.load()?.anonKey
 
-        // Base64 data URL is supported for image input. :contentReference[oaicite:3]{index=3}
-        guard let dataURL = image.jpegDataURL(compressionQuality: 0.9) else {
+        // Compress before upload to reduce payload size and latency.
+        guard let dataURL = image.compressedJPEGDataURL(maxDimension: 1400, quality: 0.7) else {
             throw OpenAIError.invalidImage
         }
-        let contextDataURL = contextImage?.jpegDataURL(compressionQuality: 0.9)
+        let contextDataURL = contextImage?.compressedJPEGDataURL(maxDimension: 1100, quality: 0.65)
 
         let body = ProxyRequest(
             mode: "image",
-            model: imageModel,
-            prompt: prompt,
             image: dataURL,
             contextImage: contextDataURL,
-            maxOutputTokens: maxOutputTokens,
-            useWebSearch: useWebSearch,
+            itemText: itemText,
+            latitude: location?.latitude,
+            longitude: location?.longitude,
+            locality: location?.locality,
+            administrativeArea: location?.administrativeArea,
+            postalCode: location?.postalCode,
+            countryCode: location?.countryCode,
             deviceId: DeviceIDStore.current
         )
 
@@ -90,7 +99,9 @@ final class OpenAIResponsesClient {
         guard let http = response as? HTTPURLResponse else {
             throw OpenAIError.httpError(-1, "No HTTP response")
         }
+        logBackendHeaders(http, mode: "image")
         notifyGuestQuotaIfNeeded(http)
+        notifySignedInQuotaIfNeeded(http)
 
         if !(200...299).contains(http.statusCode) {
             let msg = String(data: data, encoding: .utf8) ?? "(no body)"
@@ -110,24 +121,25 @@ final class OpenAIResponsesClient {
     }
 
     func analyzeText(
-        prompt: String,
-        maxOutputTokens: Int = 300,
-        useWebSearch: Bool = false,
+        itemText: String,
+        location: LocationContext?,
         accessToken: String?
     ) async throws -> String {
 
         guard let url = edgeOpenAIURL else { throw OpenAIError.invalidURL }
         let anonKey = SupabaseConfig.load()?.anonKey
 
-        _ = useWebSearch
         let body = ProxyRequest(
             mode: "text",
-            model: textModel,
-            prompt: prompt,
             image: nil,
             contextImage: nil,
-            maxOutputTokens: maxOutputTokens,
-            useWebSearch: useWebSearch,
+            itemText: itemText,
+            latitude: location?.latitude,
+            longitude: location?.longitude,
+            locality: location?.locality,
+            administrativeArea: location?.administrativeArea,
+            postalCode: location?.postalCode,
+            countryCode: location?.countryCode,
             deviceId: DeviceIDStore.current
         )
 
@@ -142,7 +154,9 @@ final class OpenAIResponsesClient {
         guard let http = response as? HTTPURLResponse else {
             throw OpenAIError.httpError(-1, "No HTTP response")
         }
+        logBackendHeaders(http, mode: "text")
         notifyGuestQuotaIfNeeded(http)
+        notifySignedInQuotaIfNeeded(http)
 
         if !(200...299).contains(http.statusCode) {
             let msg = String(data: data, encoding: .utf8) ?? "(no body)"
@@ -188,9 +202,46 @@ private func notifyGuestQuotaIfNeeded(_ response: HTTPURLResponse) {
     NotificationCenter.default.post(name: .reviveGuestQuotaUpdated, object: quota)
 }
 
+private func notifySignedInQuotaIfNeeded(_ response: HTTPURLResponse) {
+    let isProHeader = response.value(forHTTPHeaderField: "x-revive-signed-is-pro")
+    let remainingHeader = response.value(forHTTPHeaderField: "x-revive-signed-remaining")
+    let limitHeader = response.value(forHTTPHeaderField: "x-revive-signed-limit")
+    let monthHeader = response.value(forHTTPHeaderField: "x-revive-signed-month")
+
+    guard isProHeader != nil || remainingHeader != nil || limitHeader != nil else { return }
+
+    let isPro: Bool? = {
+        guard let raw = isProHeader?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !raw.isEmpty else { return nil }
+        if raw == "true" || raw == "1" || raw == "yes" { return true }
+        if raw == "false" || raw == "0" || raw == "no" { return false }
+        return nil
+    }()
+    let limit = max(1, Int(limitHeader ?? "") ?? 25)
+    let remainingValue = Int(remainingHeader ?? "")
+    let update = SignedInQuotaUpdate(
+        remaining: (isPro == true) ? nil : max(0, remainingValue ?? 0),
+        limit: limit,
+        isPro: isPro,
+        monthKey: monthHeader
+    )
+    NotificationCenter.default.post(name: .reviveSignedQuotaUpdated, object: update)
+}
+
+private func logBackendHeaders(_ response: HTTPURLResponse, mode: String) {
+    let backend = response.value(forHTTPHeaderField: "x-revive-backend") ?? "missing"
+    let requestId = response.value(forHTTPHeaderField: "x-revive-request-id") ?? "missing"
+    print("[ReViveAI] mode=\(mode) backend=\(backend) request_id=\(requestId) status=\(response.statusCode)")
+}
+
 extension Notification.Name {
     static let reviveGuestQuotaUpdated = Notification.Name("revive.guestQuotaUpdated")
+    static let reviveSignedQuotaUpdated = Notification.Name("revive.signedQuotaUpdated")
     static let reviveRequestSignIn = Notification.Name("revive.requestSignIn")
+    static let reviveRequestUpgrade = Notification.Name("revive.requestUpgrade")
+    static let reviveOpenSubscription = Notification.Name("revive.openSubscription")
+    static let reviveBillingSuccess = Notification.Name("revive.billingSuccess")
+    static let reviveBillingError = Notification.Name("revive.billingError")
 }
 
 private func extractText(from data: Data) -> String? {
@@ -238,11 +289,4 @@ private func extractText(from data: Data) -> String? {
     }
 
     return findText(json)
-}
-
-private extension UIImage {
-    func jpegDataURL(compressionQuality: CGFloat) -> String? {
-        guard let data = self.jpegData(compressionQuality: compressionQuality) else { return nil }
-        return "data:image/jpeg;base64,\(data.base64EncodedString())"
-    }
 }

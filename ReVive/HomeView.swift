@@ -14,13 +14,33 @@ struct AccountView: View {
     @EnvironmentObject private var history: HistoryStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var showEditProfile = false
+    @State private var showSettings = false
     @State private var showDeleteAlert = false
     @State private var isSigningOut = false
+    @State private var isStartingCheckout = false
+    @State private var isStartingPortal = false
+    @State private var billingMessage: String?
+    @State private var billingStatusScreen: BillingStatusScreen?
 
-    private var totalScans: Int { history.entries.count }
-    private var recyclableCount: Int { history.entries.filter { $0.recyclable }.count }
-    private var totalPoints: Int {
-        history.entries.filter { $0.source == .photo && $0.recyclable }.count
+    private var guestBannerVisible: Bool {
+        !auth.isSignedIn && auth.guestQuota != nil
+    }
+
+    private func guestSettingsTopPadding(safeTopInset: CGFloat) -> CGFloat {
+        guard guestBannerVisible else { return 12 }
+        // Match capture-page X position (~162pt from screen top) while accounting for safe-area insets here.
+        return max(12, 162 - safeTopInset)
+    }
+
+    private var recyclableCount: Int {
+        history.entries.filter { $0.recycleStatus == .recycled }.count
+    }
+    private var totalCarbonSavedKg: Double {
+        history.entries
+            .filter { $0.recycleStatus == .recycled }
+            .reduce(0) { partial, entry in
+                partial + max(0, entry.carbonSavedKg)
+            }
     }
 
     private var badges: [Badge] {
@@ -48,11 +68,40 @@ struct AccountView: View {
                 if auth.isSignedIn {
                     signedInContent
                 } else {
-                    LoginScreen()
+                    GeometryReader { proxy in
+                        LoginScreen()
+                        VStack {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    showSettings = true
+                                } label: {
+                                    Image(systemName: "gearshape.fill")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundStyle(.primary)
+                                        .frame(width: 40, height: 40)
+                                        .liquidGlassButton(in: Circle(), interactive: true)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.trailing, 24)
+                                .padding(.top, guestSettingsTopPadding(safeTopInset: proxy.safeAreaInsets.top))
+                                .animation(.spring(response: 0.35, dampingFraction: 0.9), value: guestBannerVisible)
+                            }
+                            Spacer()
+                        }
+                    }
                 }
 
                 NavigationLink(isActive: $showEditProfile) {
                     EditProfileView()
+                        .environmentObject(auth)
+                } label: {
+                    EmptyView()
+                }
+                .hidden()
+
+                NavigationLink(isActive: $showSettings) {
+                    SettingsView()
                         .environmentObject(auth)
                 } label: {
                     EmptyView()
@@ -73,16 +122,68 @@ struct AccountView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveOpenSubscription)) { _ in
+            if auth.isSignedIn {
+                startStripeCheckout()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveBillingSuccess)) { _ in
+            billingStatusScreen = .success
+            Task { @MainActor in
+                // Stripe webhook updates can be slightly delayed; poll briefly for fresh user metadata.
+                for attempt in 0..<8 {
+                    await auth.refreshSignedInUserState()
+                    if auth.hasActiveSubscription {
+                        break
+                    }
+                    if attempt < 7 {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    }
+                }
+                await auth.refreshImpactFromServer(history: history)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveBillingError)) { _ in
+            billingStatusScreen = .error("Payment was canceled or failed.")
+        }
+        .fullScreenCover(item: $billingStatusScreen) { screen in
+            BillingResultView(screen: screen) {
+                billingStatusScreen = nil
+                Task { @MainActor in
+                    await auth.refreshSignedInUserState()
+                    auth.applyConfigIfAvailable()
+                }
+            }
+        }
     }
 
     private var signedInContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Account")
-                    .font(AppType.display(30))
-                    .foregroundStyle(.primary)
+                HStack {
+                    Text("Account")
+                        .font(AppType.display(30))
+                        .foregroundStyle(.primary)
+
+                    Spacer()
+
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 40, height: 40)
+                            .liquidGlassButton(in: Circle(), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open settings")
+                }
 
                 accountHeader
+                if auth.didResolveSubscriptionState && !auth.hasActiveSubscription {
+                    subscriptionStatusCard
+                }
 
                 if auth.isAdmin {
                     NavigationLink {
@@ -163,21 +264,66 @@ struct AccountView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(auth.isSignedIn ? "Signed in" : "Guest")
-                        .font(AppType.title(16))
-                        .foregroundStyle(.primary)
-                    Text(auth.user?.displayName ?? auth.user?.email ?? "Sign in to sync your impact.")
-                        .font(AppType.body(13))
-                        .foregroundStyle(.primary.opacity(0.7))
+                    HStack(spacing: 8) {
+                        Text(auth.isSignedIn ? "Signed in" : "Guest")
+                            .font(AppType.title(16))
+                            .foregroundStyle(.primary)
+
+                        if auth.isSignedIn && auth.didResolveSubscriptionState {
+                            Button {
+                                if auth.hasActiveSubscription {
+                                    startCustomerPortal()
+                                } else {
+                                    startStripeCheckout()
+                                }
+                            } label: {
+                                Text(auth.hasActiveSubscription ? "Manage" : "Upgrade")
+                                    .font(AppType.body(11))
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        Capsule().fill(.ultraThinMaterial)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isStartingPortal || isStartingCheckout)
+                            .opacity((isStartingPortal || isStartingCheckout) ? 0.7 : 1.0)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Text(auth.user?.displayName ?? auth.user?.email ?? "Sign in to sync your impact.")
+                            .font(AppType.body(13))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        if auth.didResolveSubscriptionState && auth.hasActiveSubscription {
+                            Text("PRO")
+                                .font(AppType.body(10))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule().fill(AppTheme.mint)
+                                )
+                        } else if auth.didResolveSubscriptionState && auth.isSignedIn {
+                            Text("FREE")
+                                .font(AppType.body(10))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule().fill(Color.yellow)
+                                )
+                        }
+                    }
                 }
 
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text("\(totalPoints)")
+                    Text(formatCarbon(totalCarbonSavedKg))
                         .font(AppType.title(20))
                         .foregroundStyle(AppTheme.mint)
-                    Text("Impact")
+                    Text("CO2e Saved")
                         .font(AppType.body(12))
                         .foregroundStyle(.primary.opacity(0.6))
                     Text("Level \(currentLevel)/\(badges.count)")
@@ -226,6 +372,253 @@ struct AccountView: View {
         }
         .padding(16)
         .accountCard()
+    }
+
+    private var subscriptionStatusCard: some View {
+        let priceLabel = formatMonthlyPrice(auth.proMonthlyPriceCents)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(auth.hasActiveSubscription ? "ReVive Pro" : "Free Plan")
+                        .font(AppType.title(20))
+                        .foregroundStyle(auth.hasActiveSubscription ? AppTheme.mint : Color.yellow)
+                    if auth.hasUnlimitedAnalysis {
+                        Text("Unlimited analyses enabled.")
+                            .font(AppType.body(13))
+                            .foregroundStyle(.primary.opacity(0.75))
+                    } else {
+                        let remaining = max(0, auth.signedInQuotaRemaining ?? auth.signedInQuotaLimit)
+                        Text("\(remaining) of \(auth.signedInQuotaLimit) monthly analyses remaining.")
+                            .font(AppType.body(13))
+                            .foregroundStyle(.primary.opacity(0.75))
+                    }
+                }
+                Spacer()
+                Text(auth.hasActiveSubscription ? "\(priceLabel)/mo" : "FREE")
+                    .font(AppType.title(14))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule().fill(.ultraThinMaterial)
+                    )
+            }
+
+            Text("Upgrade to keep recycling once your free monthly scans are used.")
+                .font(AppType.body(12))
+                .foregroundStyle(.primary.opacity(0.7))
+
+            Button {
+                startStripeCheckout()
+            } label: {
+                HStack {
+                    Image(systemName: "crown.fill")
+                    Text(auth.hasActiveSubscription ? "Manage subscription" : "Upgrade plan")
+                        .font(AppType.title(15))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .bold))
+                }
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .liquidGlassButton(
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                    tint: Color.white.opacity(0.95)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isStartingCheckout)
+            .opacity(isStartingCheckout ? 0.75 : 1.0)
+
+            if let billingMessage {
+                Text(billingMessage)
+                    .font(AppType.body(12))
+                    .foregroundStyle(.primary.opacity(0.7))
+            }
+        }
+        .padding(16)
+        .accountCard()
+    }
+
+    private func formatCarbon(_ value: Double) -> String {
+        let clamped = max(0, value)
+        if clamped < 1 {
+            return String(format: "%.2f kg", clamped)
+        }
+        return String(format: "%.1f kg", clamped)
+    }
+
+    private func formatMonthlyPrice(_ cents: Int) -> String {
+        let normalized = max(0, cents)
+        let dollars = Double(normalized) / 100.0
+        if normalized % 100 == 0 {
+            return String(format: "$%.0f", dollars)
+        }
+        return String(format: "$%.2f", dollars)
+    }
+
+    private func startStripeCheckout() {
+        guard let endpoint = checkoutEndpoint() else {
+            billingStatusScreen = .error("Billing is not configured yet.")
+            return
+        }
+
+        isStartingCheckout = true
+        billingMessage = nil
+
+        Task {
+            guard let accessToken = await auth.accessTokenForAPI(), !accessToken.isEmpty else {
+                await MainActor.run {
+                    isStartingCheckout = false
+                    billingStatusScreen = .error("Session expired. Please sign in again.")
+                }
+                return
+            }
+
+            defer {
+                Task { @MainActor in
+                    isStartingCheckout = false
+                }
+            }
+
+            do {
+                var request = URLRequest(url: endpoint)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+                if !Secrets.supabaseAnonKey.isEmpty {
+                    request.setValue(Secrets.supabaseAnonKey, forHTTPHeaderField: "apikey")
+                }
+                request.httpBody = try JSONSerialization.data(withJSONObject: ["method": "stripe"], options: [])
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    await MainActor.run {
+                        billingStatusScreen = .error("Invalid billing response.")
+                    }
+                    return
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+                    await MainActor.run {
+                        billingStatusScreen = .error(message ?? "Billing request failed (\(http.statusCode)).")
+                    }
+                    return
+                }
+                guard
+                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    let checkoutURLString = json["url"] as? String,
+                    let checkoutURL = URL(string: checkoutURLString)
+                else {
+                    await MainActor.run {
+                        billingStatusScreen = .error("Checkout URL missing in billing response.")
+                    }
+                    return
+                }
+
+                await MainActor.run {
+                    UIApplication.shared.open(checkoutURL)
+                    billingMessage = "Opening Stripe Checkout..."
+                }
+            } catch {
+                await MainActor.run {
+                    billingStatusScreen = .error("Unable to start checkout right now.")
+                }
+            }
+        }
+    }
+
+    private func startCustomerPortal() {
+        guard let endpoint = customerPortalEndpoint() else {
+            billingStatusScreen = .error("Billing portal is not configured yet.")
+            return
+        }
+
+        isStartingPortal = true
+        billingMessage = nil
+
+        Task {
+            guard let accessToken = await auth.accessTokenForAPI(), !accessToken.isEmpty else {
+                await MainActor.run {
+                    isStartingPortal = false
+                    billingStatusScreen = .error("Session expired. Please sign in again.")
+                }
+                return
+            }
+
+            defer {
+                Task { @MainActor in
+                    isStartingPortal = false
+                }
+            }
+
+            do {
+                var request = URLRequest(url: endpoint)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+                if !Secrets.supabaseAnonKey.isEmpty {
+                    request.setValue(Secrets.supabaseAnonKey, forHTTPHeaderField: "apikey")
+                }
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    await MainActor.run {
+                        billingStatusScreen = .error("Invalid portal response.")
+                    }
+                    return
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+                    await MainActor.run {
+                        billingStatusScreen = .error(message ?? "Portal request failed (\(http.statusCode)).")
+                    }
+                    return
+                }
+                guard
+                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    let portalURLString = json["url"] as? String,
+                    let portalURL = URL(string: portalURLString)
+                else {
+                    await MainActor.run {
+                        billingStatusScreen = .error("Portal URL missing in response.")
+                    }
+                    return
+                }
+
+                await MainActor.run {
+                    UIApplication.shared.open(portalURL)
+                }
+            } catch {
+                await MainActor.run {
+                    billingStatusScreen = .error("Unable to open billing portal right now.")
+                }
+            }
+        }
+    }
+
+    private func checkoutEndpoint() -> URL? {
+        if let configured = auth.proBillingURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty,
+           let url = URL(string: configured) {
+            if url.host?.contains("checkout.stripe.com") == true {
+                return nil
+            }
+            return url
+        }
+        guard let base = BootstrapConfig.edgeBaseURL else { return nil }
+        return base.appendingPathComponent("functions/v1/create-checkout-session")
+    }
+
+    private func customerPortalEndpoint() -> URL? {
+        if let configured = auth.proPortalURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty,
+           let url = URL(string: configured) {
+            return url
+        }
+        guard let base = BootstrapConfig.edgeBaseURL else { return nil }
+        return base.appendingPathComponent("functions/v1/create-customer-portal-session")
     }
 
     private var badgeGrid: some View {
@@ -277,6 +670,101 @@ struct AccountView: View {
         }
         .padding(16)
         .accountCard()
+    }
+}
+
+private enum BillingStatusScreen: Identifiable {
+    case success
+    case error(String)
+
+    var id: String {
+        switch self {
+        case .success:
+            return "success"
+        case .error(let message):
+            return "error:\(message)"
+        }
+    }
+}
+
+private struct BillingResultView: View {
+    let screen: BillingStatusScreen
+    let onDone: () -> Void
+
+    var body: some View {
+        ZStack {
+            AppTheme.backgroundGradient(.dark)
+                .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                Image(systemName: screenSymbol)
+                    .font(.system(size: 46, weight: .bold))
+                    .foregroundStyle(screenColor)
+
+                Text(screenTitle)
+                    .font(AppType.title(24))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+
+                Text(screenMessage)
+                    .font(AppType.body(14))
+                    .foregroundStyle(.primary.opacity(0.8))
+                    .multilineTextAlignment(.center)
+
+                Button("Done") {
+                    onDone()
+                }
+                .font(AppType.title(16))
+                .foregroundStyle(.black)
+                .padding(.horizontal, 26)
+                .padding(.vertical, 12)
+                .liquidGlassButton(
+                    in: Capsule(),
+                    tint: Color.white.opacity(0.95)
+                )
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 26)
+            .frame(maxWidth: 380)
+            .accountCard(cornerRadius: 24)
+        }
+    }
+
+    private var screenTitle: String {
+        switch screen {
+        case .success:
+            return "Payment Successful"
+        case .error:
+            return "Payment Not Completed"
+        }
+    }
+
+    private var screenMessage: String {
+        switch screen {
+        case .success:
+            return "Your payment was received. Your ReVive Pro status will sync shortly."
+        case .error(let message):
+            return message
+        }
+    }
+
+    private var screenSymbol: String {
+        switch screen {
+        case .success:
+            return "checkmark.circle.fill"
+        case .error:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var screenColor: Color {
+        switch screen {
+        case .success:
+            return AppTheme.mint
+        case .error:
+            return Color.yellow
+        }
     }
 }
 
@@ -1552,13 +2040,6 @@ struct SettingsView: View {
         )
     }
 
-    private var allowWebSearchBinding: Binding<Bool> {
-        Binding(
-            get: { auth.allowWebSearchEnabled },
-            set: { auth.updateAllowWebSearch($0) }
-        )
-    }
-
     private var hapticsBinding: Binding<Bool> {
         Binding(
             get: { auth.enableHaptics },
@@ -1692,10 +2173,6 @@ struct SettingsView: View {
                 }
             }
 
-            Toggle("Allow web search for local rules", isOn: allowWebSearchBinding)
-                .font(AppType.body(13))
-                .foregroundStyle(.primary)
-                .tint(AppTheme.mint)
         }
 
         return settingsCard(content)
@@ -1734,10 +2211,6 @@ struct SettingsView: View {
                 .foregroundStyle(.primary)
                 .tint(AppTheme.mint)
 
-            Toggle("Allow web search for local rules", isOn: allowWebSearchBinding)
-                .font(AppType.body(13))
-                .foregroundStyle(.primary)
-                .tint(AppTheme.mint)
         }
         return settingsCard(content)
     }

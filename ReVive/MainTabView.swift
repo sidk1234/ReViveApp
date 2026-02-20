@@ -8,10 +8,10 @@ import Combine
 
 struct MainTabView: View {
     enum Tab: Int, CaseIterable {
-        case settings
+        case impact
         case account
         case camera
-        case impact
+        case bin
         case leaderboard
     }
 
@@ -22,11 +22,13 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-                SettingsView()
+                NavigationStack {
+                    ImpactView()
+                }
                     .tabItem {
-                        Label("Settings", systemImage: "gearshape.fill")
+                        Label("Impact", systemImage: "leaf.fill")
                     }
-                    .tag(Tab.settings)
+                    .tag(Tab.impact)
 
                 AccountView()
                     .tabItem {
@@ -40,13 +42,13 @@ struct MainTabView: View {
                     }
                     .tag(Tab.camera)
 
-                ImpactView {
-                    selection = .account
+                NavigationStack {
+                    BinView()
                 }
                 .tabItem {
-                    Label("Impact", systemImage: "leaf.fill")
+                    Label("Bin", systemImage: "trash.fill")
                 }
-                .tag(Tab.impact)
+                .tag(Tab.bin)
 
                 LeaderboardView {
                     selection = .account
@@ -87,12 +89,21 @@ struct MainTabView: View {
                 .receive(on: RunLoop.main)
         ) { note in
             if let quota = note.object as? GuestQuota, !auth.isSignedIn {
-                auth.guestQuota = quota
-                bannerQuota = quota
+                auth.applyGuestQuotaUpdate(quota)
+                bannerQuota = auth.guestQuota
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .reviveRequestSignIn)) { _ in
             selection = .account
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveOpenBin)) { _ in
+            selection = .bin
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveRequestUpgrade)) { _ in
+            selection = .account
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NotificationCenter.default.post(name: .reviveOpenSubscription, object: nil)
+            }
         }
         .onChange(of: auth.guestQuota) { _, newValue in
             if let newValue, !auth.isSignedIn {
@@ -120,6 +131,25 @@ struct MainTabView: View {
                 }
             }
         }
+        .onAppear {
+            syncBinReminder(for: history.entries)
+        }
+        .onChange(of: history.entries) { _, entries in
+            syncBinReminder(for: entries)
+        }
+    }
+
+    private func syncBinReminder(for entries: [HistoryEntry]) {
+        let markedCount = markedForRecycleCount(in: entries)
+        BinReminderNotificationManager.shared.syncPendingBinReminder(markedCount: markedCount)
+    }
+
+    private func markedForRecycleCount(in entries: [HistoryEntry]) -> Int {
+        var count = 0
+        for entry in entries where entry.recycleStatus == .markedForRecycle {
+            count += 1
+        }
+        return count
     }
 }
 

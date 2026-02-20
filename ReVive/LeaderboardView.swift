@@ -21,7 +21,7 @@ struct LeaderboardView: View {
                     .font(AppType.display(30))
                     .foregroundStyle(.primary)
 
-                Text("Top recyclers based on verified daily impact.")
+                Text("Top recyclers ranked by total CO2e saved.")
                     .font(AppType.body(16))
                     .foregroundStyle(.primary.opacity(0.7))
 
@@ -105,12 +105,25 @@ private struct LeaderboardRow: View {
 
             Spacer()
 
-            Text("\(entry.totalPoints)")
-                .font(AppType.title(18))
-                .foregroundStyle(AppTheme.mint)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(formatCarbon(entry.totalCarbonSavedKg))
+                    .font(AppType.title(18))
+                    .foregroundStyle(AppTheme.mint)
+                Text("CO2e")
+                    .font(AppType.body(11))
+                    .foregroundStyle(.primary.opacity(0.62))
+            }
         }
         .padding(16)
         .staticCard(cornerRadius: 20)
+    }
+
+    private func formatCarbon(_ value: Double) -> String {
+        let clamped = max(0, value)
+        if clamped < 1 {
+            return String(format: "%.2f kg", clamped)
+        }
+        return String(format: "%.1f kg", clamped)
     }
 }
 
