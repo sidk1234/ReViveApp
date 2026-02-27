@@ -1,8 +1,7 @@
 import SwiftUI
 
 struct OnboardingView: View {
-    private let tagline = "Earth. One Scan At A Time."
-    private let earthSegmentLength = "Earth.".count
+    private let tagline = "One Scan At A Time."
 
     let onContinue: () -> Void
     @State private var typedCharacters = 0
@@ -15,8 +14,6 @@ struct OnboardingView: View {
             let safeTop = proxy.safeAreaInsets.top
             let safeBottom = proxy.safeAreaInsets.bottom
             let compact = proxy.size.height < 760
-            let logoWidth = compact ? min(180, proxy.size.width * 0.50) : min(220, proxy.size.width * 0.58)
-            let logoHeight: CGFloat = compact ? 56 : 68
             let titleSize: CGFloat = compact ? 24 : 29
             let stepHeight = compact ? proxy.size.height * 0.43 : proxy.size.height * 0.46
 
@@ -25,14 +22,16 @@ struct OnboardingView: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: compact ? 14 : 26) {
-                    Image("LandscapeLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: logoWidth, height: logoHeight)
+                    reviveEarthBrand(
+                        isCompact: compact,
+                        horizontalOffset: 0,
+                        boxed: false,
+                        emphasize: true
+                    )
                         .padding(.top, safeTop + (compact ? 8 : 14))
                         .layoutPriority(2)
 
-                    typewriterTagline(titleSize: titleSize, isCompact: compact)
+                    taglineText(titleSize: titleSize, isCompact: compact)
                         .padding(.horizontal, 8)
                         .frame(minHeight: compact ? 38 : 44)
 
@@ -43,51 +42,13 @@ struct OnboardingView: View {
 
                     Spacer(minLength: compact ? 4 : 8)
 
-                    let ctaLogoWidth: CGFloat = compact ? 84 : 96
-                    let ctaLogoHeight: CGFloat = compact ? 26 : 30
-                    let ctaEarthSize: CGFloat = compact ? 24 : 26
-                    let ctaContentSpacing: CGFloat = -5
-                    let ctaHorizontalOffset: CGFloat = -10
-                    let ctaEarthVerticalOffset: CGFloat = 3.5
-
                     Button(action: onContinue) {
-                        HStack(spacing: ctaContentSpacing) {
-                            Image("LandscapeLogo")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: ctaLogoWidth, height: ctaLogoHeight)
-
-                            (
-                                Text("Earth")
-                                    .foregroundStyle(LinearGradient(
-                                        colors: [Color(red: 0.22, green: 0.75, blue: 0.86),
-                                                 Color(red: 0.92, green: 0.80, blue: 0.27)],
-                                        startPoint: .bottomLeading, endPoint: .trailing))
-                            )
-                            .font(AppType.title(ctaEarthSize))
-                            .offset(y: ctaEarthVerticalOffset)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .offset(x: ctaHorizontalOffset)
-                        .padding(.vertical, compact ? 12 : 14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            Color(red: 0.02, green: 0.24, blue: 0.29),
-                                            Color(red: 0.03, green: 0.38, blue: 0.28)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
+                        reviveEarthBrand(
+                            isCompact: compact,
+                            horizontalOffset: -10,
+                            boxed: true,
+                            emphasize: false
                         )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.24), lineWidth: 1)
-                        )
-                        .shadow(color: Color.black.opacity(0.28), radius: 10, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, 24)
@@ -96,30 +57,26 @@ struct OnboardingView: View {
                 .padding(.horizontal, 16)
             }
         }
-        .onAppear { startTypewriterAnimation(); startCursorBlink() }
+        .onAppear {
+            startTypewriterAnimation()
+            startCursorBlink()
+        }
         .onDisappear {
-            typingTask?.cancel(); cursorTask?.cancel()
-            typingTask = nil; cursorTask = nil
+            typingTask?.cancel()
+            cursorTask?.cancel()
+            typingTask = nil
+            cursorTask = nil
         }
     }
 
-    // MARK: - Typewriter
+    // MARK: - Brand + Tagline
 
     @ViewBuilder
-    private func typewriterTagline(titleSize: CGFloat, isCompact: Bool) -> some View {
+    private func taglineText(titleSize: CGFloat, isCompact: Bool) -> some View {
         let visibleCount = min(typedCharacters, tagline.count)
-        let earthCount   = min(visibleCount, earthSegmentLength)
-        let restCount    = max(0, visibleCount - earthSegmentLength)
-        let earthText    = String(tagline.prefix(earthCount))
-        let restText     = String(tagline.dropFirst(earthSegmentLength).prefix(restCount))
-
-        (Text(earthText)
-            .foregroundStyle(LinearGradient(
-                colors: [Color(red: 0.22, green: 0.75, blue: 0.86),
-                         Color(red: 0.92, green: 0.80, blue: 0.27)],
-                startPoint: .leading, endPoint: .trailing))
-         + Text(restText).foregroundStyle(.white)
-         + Text(showCursor ? "|" : " ").foregroundStyle(.white.opacity(0.95))
+        let typedText = String(tagline.prefix(visibleCount))
+        (Text(typedText).foregroundStyle(.white)
+            + Text(showCursor ? "|" : " ").foregroundStyle(.white.opacity(0.95))
         )
         .font(AppType.display(titleSize))
         .lineLimit(1)
@@ -127,8 +84,47 @@ struct OnboardingView: View {
         .multilineTextAlignment(.center)
     }
 
+    private func reviveEarthBrand(
+        isCompact: Bool,
+        horizontalOffset: CGFloat,
+        boxed: Bool,
+        emphasize: Bool
+    ) -> some View {
+        let logoWidth: CGFloat = emphasize ? (isCompact ? 138 : 170) : (isCompact ? 84 : 96)
+        let logoHeight: CGFloat = emphasize ? (isCompact ? 42 : 52) : (isCompact ? 26 : 30)
+        let earthSize: CGFloat = emphasize ? (isCompact ? 44 : 54) : (isCompact ? 24 : 26)
+        let contentSpacing: CGFloat = -5
+        let earthVerticalOffset: CGFloat = emphasize ? 4.5 : 3.5
+
+        return HStack(spacing: contentSpacing) {
+            Image("LandscapeLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: logoWidth, height: logoHeight)
+
+            Text("Earth")
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.22, green: 0.75, blue: 0.86),
+                            Color(red: 0.92, green: 0.80, blue: 0.27)
+                        ],
+                        startPoint: .bottomLeading,
+                        endPoint: .trailing
+                    )
+                )
+                .font(AppType.title(earthSize))
+                .offset(y: earthVerticalOffset)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .offset(x: horizontalOffset)
+        .padding(.vertical, boxed ? (isCompact ? 12 : 14) : 0)
+        .modifier(ReViveEarthBrandShell(boxed: boxed))
+    }
+
     private func startTypewriterAnimation() {
-        guard typedCharacters == 0, typingTask == nil else { return }
+        typingTask?.cancel()
+        typedCharacters = 0
         typingTask = Task { @MainActor in
             for count in 0...tagline.count {
                 guard !Task.isCancelled else { break }
@@ -140,7 +136,8 @@ struct OnboardingView: View {
     }
 
     private func startCursorBlink() {
-        guard cursorTask == nil else { return }
+        cursorTask?.cancel()
+        showCursor = true
         cursorTask = Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(520))
@@ -292,6 +289,37 @@ struct OnboardingView: View {
         .shadow(color: Color.black.opacity(0.14), radius: 7, x: 0, y: 4)
     }
 
+}
+
+private struct ReViveEarthBrandShell: ViewModifier {
+    let boxed: Bool
+
+    func body(content: Content) -> some View {
+        if boxed {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.02, green: 0.24, blue: 0.29),
+                                    Color(red: 0.03, green: 0.38, blue: 0.28)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.24), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.28), radius: 10, x: 0, y: 6)
+        } else {
+            content
+                .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 4)
+        }
+    }
 }
 
 #Preview {
