@@ -250,9 +250,7 @@ struct MainTabView: View {
     private func handleAuthSignInChange(_ isSignedIn: Bool) {
         if isSignedIn {
             dismissGuestPopup()
-            if auth.shouldOfferTutorialAfterSignup {
-                showTutorialOffer = true
-            }
+            presentTutorialOfferIfNeeded()
             return
         }
 
@@ -276,6 +274,7 @@ struct MainTabView: View {
     private func handleOnAppear() {
         syncBinReminder(for: history.entries)
         presentLaunchGuestPopupIfNeeded()
+        presentTutorialOfferIfNeeded()
     }
 
     private func handleHistoryEntriesChange(_ entries: [HistoryEntry]) {
@@ -301,6 +300,14 @@ struct MainTabView: View {
     private func handleGuestSignInTap() {
         dismissGuestPopup()
         selection = .account
+    }
+
+    private func presentTutorialOfferIfNeeded() {
+        guard auth.isSignedIn else { return }
+        guard auth.shouldOfferTutorialAfterSignup else { return }
+        guard !showTutorialOffer else { return }
+        guard !showTutorialOverlay else { return }
+        showTutorialOffer = true
     }
 
     private func presentLaunchGuestPopupIfNeeded() {

@@ -30,11 +30,106 @@ struct HomeFeedView: View {
     private let homeTopAnchorID = "revive.home.scroll.top"
 
     private let dailyTips = [
-        "Rinse containers before recycling to prevent contamination.",
-        "Plastic bags do not belong in curbside bins; return them to store drop-offs.",
-        "Flatten cardboard to save space in recycling bins.",
-        "Keep food-soiled paper out of paper recycling to avoid contamination.",
-        "Empty and dry metal cans before putting them in recycling.",
+        "Rinse food residue from bottles and jars before recycling.",
+        "Keep paper and cardboard dry to protect fiber quality.",
+        "Flatten cardboard boxes to save bin space.",
+        "Remove plastic film and tape from cardboard when possible.",
+        "Recycle metal cans empty and dry.",
+        "Place caps back on plastic bottles only if local rules allow.",
+        "Do not bag recyclables unless your city asks for it.",
+        "Keep plastic bags out of curbside bins.",
+        "Return plastic bags to grocery store drop bins.",
+        "Compost food scraps instead of putting them in landfill.",
+        "Use a reusable bottle to reduce single-use plastic.",
+        "Break down shipping boxes before bin day.",
+        "Donate clean clothing and textiles before discarding.",
+        "Recycle glass bottles and jars without ceramic contamination.",
+        "Keep shattered glass out of curbside recycling.",
+        "Reuse sturdy jars for storage before recycling.",
+        "Check local rules for black plastic items.",
+        "Keep battery terminals taped before drop-off.",
+        "Take rechargeable batteries to proper battery collection sites.",
+        "Recycle e-waste at certified collection centers.",
+        "Remove food from pizza boxes before recycling clean sections.",
+        "Compost greasy pizza box bottoms if accepted locally.",
+        "Empty aerosol cans completely before recycling where allowed.",
+        "Keep propane tanks out of household recycling bins.",
+        "Use refill packs to reduce packaging waste.",
+        "Choose products with recycled-content packaging.",
+        "Avoid wish-cycling; when in doubt check local guidance.",
+        "Keep hoses, cords, and wires out of curbside carts.",
+        "Recycle aluminum foil only when clean and balled up.",
+        "Rinse peanut butter jars to prevent contamination.",
+        "Do not place diapers in recycling bins.",
+        "Recycle newspapers and mail without plastic sleeves.",
+        "Remove plastic windows from envelopes if required locally.",
+        "Keep Styrofoam out unless your area accepts it.",
+        "Recycle cartons only if your local program accepts them.",
+        "Drain liquids fully from containers before recycling.",
+        "Skip shredding paper when possible; intact paper recycles better.",
+        "Bring reusable bags for shopping trips.",
+        "Repair items before replacing them.",
+        "Donate furniture in usable condition.",
+        "Keep light bulbs separated; many need special drop-off.",
+        "Return ink cartridges through retailer take-back programs.",
+        "Remove pumps from lotion bottles when possible.",
+        "Bundle small metal lids inside a larger can if allowed.",
+        "Keep yard waste separate from mixed trash.",
+        "Leave recyclables loose in the cart for easier sorting.",
+        "Rinse takeout containers before recycling clean plastic.",
+        "Compost coffee grounds and paper filters.",
+        "Recycle steel food cans after a quick rinse.",
+        "Remove food-soiled paper towels from recycling streams.",
+        "Choose durable goods over disposable alternatives.",
+        "Avoid mixed-material packaging when shopping.",
+        "Prefer glass or metal containers that are widely recyclable.",
+        "Keep hazardous chemicals out of household trash.",
+        "Bring old paint to household hazardous waste events.",
+        "Return used motor oil to approved collection sites.",
+        "Store recyclables dry indoors before pickup day.",
+        "Break apart nested items so sorters can separate materials.",
+        "Keep receipts out of paper recycling when they are thermal paper.",
+        "Use both sides of paper before recycling.",
+        "Recycle holiday lights at specialty drop-offs.",
+        "Donate working electronics before recycling them.",
+        "Remove batteries from electronics before disposal.",
+        "Compost fruit and vegetable scraps when possible.",
+        "Use reusable food containers for leftovers.",
+        "Recycle empty detergent bottles after rinsing.",
+        "Keep cups with wax or plastic lining out unless accepted.",
+        "Rinse pet food cans before recycling.",
+        "Choose concentrated cleaning products to reduce packaging.",
+        "Refill soap dispensers instead of buying new bottles.",
+        "Avoid contaminants like food, liquids, and grease in recycling.",
+        "Place glass in designated bins where curbside does not accept it.",
+        "Recycle scrap metal at local metal yards when possible.",
+        "Check resin numbers on plastics, then confirm local acceptance.",
+        "Keep syringes and medical sharps out of household bins.",
+        "Use approved sharps disposal programs for medical waste.",
+        "Compost leaves and grass clippings to enrich soil.",
+        "Avoid buying single-use partyware when reusable options exist.",
+        "Recycle empty spray cleaner bottles after removing trigger if required.",
+        "Keep rubber items out of recycling unless a specialty program exists.",
+        "Return shoe boxes and paperboard packaging to recycling.",
+        "Donate books in good condition before recycling paperbacks.",
+        "Remove plastic wrap from multipack bottles before recycling.",
+        "Save packing peanuts for reuse or take-back programs.",
+        "Recycle tin cans and lids according to local guidance.",
+        "Keep ceramics and cookware out of glass recycling.",
+        "Bring reusable cups for coffee to reduce waste.",
+        "Choose bar soaps with minimal packaging.",
+        "Wash and dry reusable straws and utensils for repeated use.",
+        "Recycle clean aluminum trays and pie tins.",
+        "Compost biodegradable tea bags when plastic-free.",
+        "Keep napkins and tissues out of paper recycling.",
+        "Use municipal drop-off centers for oversized recyclables.",
+        "Keep mirrors and window glass out of bottle glass streams.",
+        "Recycle printer paper separately if your office has a dedicated bin.",
+        "Flatten milk and juice cartons where accepted.",
+        "Place bottle caps and lids according to your city's rule.",
+        "Keep construction debris out of household recycling.",
+        "Plan meals to reduce food waste and compost scraps.",
+        "Set up labeled bins at home to reduce sorting mistakes.",
     ]
 
     private let mythFactPairs: [(myth: String, fact: String)] = [
@@ -294,39 +389,80 @@ struct HomeFeedView: View {
             HStack(spacing: 10) {
                 Image(systemName: "leaf.fill")
                     .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(AppTheme.mint)
+                    .foregroundStyle(dailyTipIconColor)
 
                 Text("Today's Recycling Tip")
                     .font(AppType.title(18))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(dailyTipTitleColor)
             }
 
             Text(todayTip)
                 .font(AppType.body(15))
-                .foregroundStyle(.primary.opacity(0.92))
+                .foregroundStyle(dailyTipBodyColor)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(encouragementText)
                 .font(AppType.body(12))
-                .foregroundStyle(AppTheme.mint.opacity(0.92))
+                .foregroundStyle(dailyTipSecondaryColor)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [AppTheme.deepTeal.opacity(0.85), AppTheme.night.opacity(0.75)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(dailyTipBackgroundGradient)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(AppTheme.mint.opacity(0.4), lineWidth: 1)
         )
         .shadow(color: AppTheme.mint.opacity(0.18), radius: 14, x: 0, y: 8)
+    }
+
+    private var dailyTipBackgroundGradient: LinearGradient {
+        if colorScheme == .light {
+            return LinearGradient(
+                colors: [
+                    Color(red: 0.84, green: 0.95, blue: 0.91),
+                    Color(red: 0.72, green: 0.87, blue: 0.82)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+
+        return LinearGradient(
+            colors: [AppTheme.deepTeal.opacity(0.85), AppTheme.night.opacity(0.75)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var dailyTipIconColor: Color {
+        if colorScheme == .light {
+            return Color(red: 0.07, green: 0.42, blue: 0.34)
+        }
+        return AppTheme.mint
+    }
+
+    private var dailyTipTitleColor: Color {
+        if colorScheme == .light {
+            return Color(red: 0.07, green: 0.11, blue: 0.14)
+        }
+        return .primary
+    }
+
+    private var dailyTipBodyColor: Color {
+        if colorScheme == .light {
+            return Color(red: 0.10, green: 0.16, blue: 0.20)
+        }
+        return .primary.opacity(0.92)
+    }
+
+    private var dailyTipSecondaryColor: Color {
+        if colorScheme == .light {
+            return Color(red: 0.06, green: 0.32, blue: 0.27)
+        }
+        return AppTheme.mint.opacity(0.92)
     }
 
     private var statsRow: some View {
