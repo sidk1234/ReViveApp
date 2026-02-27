@@ -56,6 +56,13 @@ enum ImpactKey {
 
     static func areSimilarTokens(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
         guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        // Do not merge entries based only on non-specific placeholders.
+        let genericTokens: Set<String> = [
+            "unknown", "unkown", "unknow", "unidentified", "item", "object", "thing"
+        ]
+        let meaningfulOverlap = lhs.intersection(rhs).subtracting(genericTokens)
+        guard !meaningfulOverlap.isEmpty else { return false }
+
         let intersection = lhs.intersection(rhs).count
         let minCount = min(lhs.count, rhs.count)
         if minCount >= 3 {
@@ -77,7 +84,8 @@ enum ImpactKey {
         let stopwords: Set<String> = [
             "a", "an", "the", "and", "or", "of", "for", "with", "without",
             "in", "on", "at", "to", "from", "by", "into", "over", "under",
-            "this", "that", "these", "those", "item", "recyclable", "recycling"
+            "this", "that", "these", "those", "item", "recyclable", "recycling",
+            "unknown", "unkown", "unknow", "unidentified", "object", "objects", "thing"
         ]
         let measurementTokens: Set<String> = [
             "oz", "floz", "fl", "ml", "l", "ltr", "liter", "liters",

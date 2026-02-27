@@ -19,6 +19,7 @@ struct LocationContext {
 }
 
 struct CameraScreen: View {
+    var guestHeaderInset: CGFloat = 0
 
     @StateObject private var camera = CameraViewModel()
     @Environment(\.scenePhase) private var scenePhase
@@ -48,11 +49,12 @@ struct CameraScreen: View {
         @State private var showNoItemMessage: Bool = false
         @State private var noItemOpacity: Double = 0
         @State private var isLocationEntryExpanded: Bool = true
-        @State private var didToggleLocationEntry: Bool = false
+        @State private var didRequestLocationFromZipField: Bool = false
         @State private var showRecycleToast: Bool = false
         @State private var recycleToastMessage: String = "Added to Bin"
         @State private var zoomGestureStart: CGFloat = 1.0
         @State private var isZooming: Bool = false
+        @State private var showFirstRecycleTutorial: Bool = false
 
         private let sideSize: CGFloat = 70
         private let shutterSize: CGFloat = 85
@@ -61,6 +63,7 @@ struct CameraScreen: View {
         private let notesCollapsedLines: Int = 2
         private let notesExpandedMaxHeight: CGFloat = 120
         private let textEntryKeyboardSpacing: CGFloat = 0
+        private let firstRecycleTutorialKey = "revive.tutorial.capture.firstRecycleAction"
 
         private var bottomControlsPadding: CGFloat {
             let extra = isTextEntryActive ? textEntryKeyboardSpacing : 0
@@ -83,13 +86,7 @@ struct CameraScreen: View {
             auth.isAnalysisQuotaExhausted
         }
 
-        private var guestBannerVisible: Bool {
-            !auth.isSignedIn && auth.guestQuota != nil
-        }
-
-        private var topControlsTopPadding: CGFloat {
-            guestBannerVisible ? 154 : 60
-        }
+        private let topControlsTopPadding: CGFloat = 72
 
         private var captureControlsDisabled: Bool {
             false
@@ -105,27 +102,23 @@ struct CameraScreen: View {
         }
 
         private var shouldShowLocationEntry: Bool {
-            if !hasLocationAccess {
-                return true
-            }
             return isLocationEntryExpanded
         }
 
         private func updateLocationEntryVisibility() {
-            if !hasLocationAccess {
-                isLocationEntryExpanded = true
-                didToggleLocationEntry = false
-                return
-            }
-            if !didToggleLocationEntry {
+            if hasLocationAccess {
+                if didRequestLocationFromZipField {
+                    return
+                }
                 isLocationEntryExpanded = false
+            } else {
+                isLocationEntryExpanded = true
             }
         }
 
         private func toggleLocationEntry() {
             if hasLocationAccess {
                 isLocationEntryExpanded.toggle()
-                didToggleLocationEntry = true
             } else {
                 isLocationEntryExpanded = true
             }
@@ -211,22 +204,7 @@ struct CameraScreen: View {
     }
 
     private var loadingStatus: some View {
-        TimelineView(.animation) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
-            let angle = (time.truncatingRemainder(dividingBy: 1.1) / 1.1) * 360
-
-            ZStack {
-                Circle()
-                    .stroke(Color.primary.opacity(0.25), lineWidth: 10)
-                    .frame(width: statusSize, height: statusSize)
-
-                Circle()
-                    .trim(from: 0.0, to: 0.25)
-                    .stroke(Color.primary, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                    .frame(width: statusSize, height: statusSize)
-                    .rotationEffect(.degrees(angle))
-            }
-        }
+        AnalysisLoadingView(reduceMotion: auth.reduceMotionEnabled)
     }
 
     private var resultStatus: some View {
@@ -316,6 +294,7 @@ struct CameraScreen: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .anchorPreference(key: CaptureRecycleActionAnchorKey.self, value: .bounds) { $0 }
                 } else {
                     Button {
                         markResultForRecycle()
@@ -335,6 +314,7 @@ struct CameraScreen: View {
                         .shadow(color: Color.yellow.opacity(0.65), radius: 10, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
+                    .anchorPreference(key: CaptureRecycleActionAnchorKey.self, value: .bounds) { $0 }
                 }
             } else {
                 Button {
@@ -551,7 +531,7 @@ struct CameraScreen: View {
                 .font(AppType.body(11))
                 .foregroundStyle(.primary.opacity(0.6))
             AddressLinkText(
-                text: value.isEmpty ? "unknown" : value,
+                text: value.isEmpty ? "Not available" : value,
                 font: AppType.title(15),
                 color: .primary.opacity(0.95)
             )
@@ -620,6 +600,7 @@ struct CameraScreen: View {
     }
 
     private func markResultForRecycle() {
+        completeFirstRecycleTutorialIfNeeded()
         addCurrentResultToBin(status: .markedForRecycle)
     }
 
@@ -683,12 +664,31 @@ struct CameraScreen: View {
         }
     }
 
+    private func switchCameraIfAllowed() {
+        guard camera.capturedImage == nil else { return }
+        guard !camera.aiIsLoading else { return }
+        guard !captureControlsDisabled else { return }
+        camera.switchCamera()
+        if auth.enableHaptics {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
+    private func completeFirstRecycleTutorialIfNeeded() {
+        if !UserDefaults.standard.bool(forKey: firstRecycleTutorialKey) {
+            UserDefaults.standard.set(true, forKey: firstRecycleTutorialKey)
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showFirstRecycleTutorial = false
+        }
+    }
+
     private func resolveLocationContext() -> LocationContext {
         let usableLocation = locationManager.usableLocation
         let hasLocation = usableLocation != nil
         let resolvedZip = locationManager.postalCode.isEmpty ? nil : locationManager.postalCode
         let manualZip = zipCode.isEmpty ? nil : zipCode
-        let zipForPrompt = hasLocation ? resolvedZip : manualZip
+        let zipForPrompt = resolvedZip ?? manualZip
         let context = LocationContext(
             latitude: usableLocation?.coordinate.latitude,
             longitude: usableLocation?.coordinate.longitude,
@@ -743,14 +743,15 @@ struct CameraScreen: View {
         zipFieldFocused = false
         manualTextFocused = false
         clearAIResult()
-        if let accessToken = auth.session?.accessToken, !accessToken.isEmpty {
-            camera.sendTextToOpenAI(
-                itemText: trimmed,
-                location: context,
-                accessToken: accessToken
-            )
-        } else {
-            Task { @MainActor in
+        Task { @MainActor in
+            let accessToken = await auth.accessTokenForAPI()
+            if let accessToken, !accessToken.isEmpty {
+                camera.sendTextToOpenAI(
+                    itemText: trimmed,
+                    location: context,
+                    accessToken: accessToken
+                )
+            } else {
                 _ = await auth.fetchGuestQuota()
                 camera.sendTextToOpenAI(
                     itemText: trimmed,
@@ -905,7 +906,7 @@ struct CameraScreen: View {
             } else {
                 // CAMERA MODE: ZStack for perfect centering of Shutter Button
                 ZStack(alignment: .center) {
-                    // Layer 1: Left Button in HStack
+                    // Layer 1: Side buttons in HStack
                     HStack {
                         Button {
                             isPhotoPickerPresented = true
@@ -928,8 +929,19 @@ struct CameraScreen: View {
                                 await MainActor.run { pickedItem = nil }
                             }
                         }
-                        
+
                         Spacer()
+
+                        Button {
+                            switchCameraIfAllowed()
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .foregroundStyle(.primary)
+                                .font(.system(size: 18, weight: .semibold))
+                                .frame(width: sideSize, height: sideSize)
+                                .liquidGlassButton(in: Circle(), interactive: true)
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 24)
 
@@ -982,6 +994,7 @@ struct CameraScreen: View {
 
                 locationIconButton {
                     zipFieldFocused = false
+                    didRequestLocationFromZipField = true
                     locationManager.requestLocation()
                 }
             }
@@ -1028,6 +1041,7 @@ struct CameraScreen: View {
 
                 locationIconButton {
                     zipFieldFocused = false
+                    didRequestLocationFromZipField = true
                     locationManager.requestLocation()
                 }
             }
@@ -1164,8 +1178,19 @@ struct CameraScreen: View {
                         isZooming = false
                     }
 
+                let switchSwipe = DragGesture(minimumDistance: 26)
+                    .onEnded { value in
+                        let horizontal = value.translation.width
+                        let vertical = value.translation.height
+                        let horizontalIntent = abs(horizontal) > 42 && abs(horizontal) > abs(vertical) * 1.15
+                        let verticalIntent = abs(vertical) > 42 && abs(vertical) > abs(horizontal) * 1.15
+                        guard horizontalIntent || verticalIntent else { return }
+                        switchCameraIfAllowed()
+                    }
+
                 CameraPreview(session: camera.session)
                     .gesture(pinch)
+                    .simultaneousGesture(switchSwipe)
                     .allowsHitTesting(!captureControlsDisabled)
                     .ignoresSafeArea()
             }
@@ -1229,7 +1254,6 @@ struct CameraScreen: View {
                                 .liquidGlassButton(in: Circle(), interactive: true)
                         }
                         .buttonStyle(.plain)
-                        .offset(y: guestBannerVisible ? 8 : 0)
                     }
 
                     Spacer()
@@ -1238,9 +1262,9 @@ struct CameraScreen: View {
                 }
                 .padding(.leading, 24)
                 .padding(.trailing, 24)
-                .padding(.top, topControlsTopPadding)
-                .animation(.spring(response: 0.35, dampingFraction: 0.9), value: guestBannerVisible)
+                .padding(.top, topControlsTopPadding + guestHeaderInset)
                 .disabled(captureControlsDisabled)
+                .animation(.easeInOut(duration: 0.2), value: guestHeaderInset)
 
                 Spacer()
             }
@@ -1282,6 +1306,10 @@ struct CameraScreen: View {
                                         .frame(maxWidth: 360)
                                 } else {
                                     zoomPill
+                                }
+                                if shouldShowLocationEntry {
+                                    zipControlsRow
+                                    locationStatus
                                 }
                                 Group {
                                     if #available(iOS 26.0, *) {
@@ -1331,11 +1359,13 @@ struct CameraScreen: View {
                                 manualTextFocused = false
                                 lastAnalysisSource = .photo
                                 lastSavedJSON = nil
-                                let accessToken = auth.session?.accessToken
-                                camera.sendSelectionToOpenAI(
-                                    location: context,
-                                    accessToken: accessToken
-                                )
+                                Task { @MainActor in
+                                    let accessToken = await auth.accessTokenForAPI()
+                                    camera.sendSelectionToOpenAI(
+                                        location: context,
+                                        accessToken: accessToken
+                                    )
+                                }
 
                             } label: {
                                 HStack(spacing: 10) {
@@ -1370,11 +1400,13 @@ struct CameraScreen: View {
                                 manualTextFocused = false
                                 lastAnalysisSource = .photo
                                 lastSavedJSON = nil
-                                let accessToken = auth.session?.accessToken
-                                camera.sendSelectionToOpenAI(
-                                    location: context,
-                                    accessToken: accessToken
-                                )
+                                Task { @MainActor in
+                                    let accessToken = await auth.accessTokenForAPI()
+                                    camera.sendSelectionToOpenAI(
+                                        location: context,
+                                        accessToken: accessToken
+                                    )
+                                }
                             } label: {
                                 HStack(spacing: 10) {
                                     Image(systemName: "arrow.clockwise")
@@ -1403,6 +1435,25 @@ struct CameraScreen: View {
                     .zIndex(2)
             }
         }
+        .overlayPreferenceValue(CaptureRecycleActionAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if showFirstRecycleTutorial, let anchor {
+                    let targetRect = proxy[anchor]
+                    TargetTutorialOverlay(
+                        targetRect: targetRect,
+                        title: "Mark For Recycle",
+                        message: "Tap this highlighted button after a recyclable result so it moves into Bin for final confirmation.",
+                        highlightStyle: .capsule(padding: 2),
+                        showPressIndicator: true,
+                        onTargetTap: {
+                            markResultForRecycle()
+                        }
+                    )
+                    .transition(.opacity)
+                    .zIndex(500)
+                }
+            }
+        }
         .onAppear {
             pulse = !auth.reduceMotionEnabled
             camera.hapticsEnabled = auth.enableHaptics
@@ -1412,7 +1463,7 @@ struct CameraScreen: View {
             camera.startSession()
         }
         .onDisappear {
-            camera.stopSession()
+            // Keep session warm across in-app navigation to avoid restart delay.
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.9), value: camera.aiIsLoading)
         .animation(.spring(response: 0.45, dampingFraction: 0.9), value: camera.aiParsedResult)
@@ -1420,6 +1471,10 @@ struct CameraScreen: View {
         .onChange(of: locationManager.postalCode) { _, newValue in
             guard !newValue.isEmpty else { return }
             zipCode = newValue
+            if didRequestLocationFromZipField && hasLocationAccess {
+                didRequestLocationFromZipField = false
+                isLocationEntryExpanded = false
+            }
         }
         .onChange(of: locationManager.authorizationStatus) { _, _ in
             updateLocationEntryVisibility()
@@ -1531,9 +1586,18 @@ struct CameraScreen: View {
                 } else {
                     scoreNotice = nil
                 }
+                let hasSeenFirstRecycleTutorial = UserDefaults.standard.bool(forKey: firstRecycleTutorialKey)
+                if result.recyclable, !hasSeenFirstRecycleTutorial {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showFirstRecycleTutorial = true
+                    }
+                } else {
+                    showFirstRecycleTutorial = false
+                }
             } else {
                 isDuplicateResult = false
                 scoreNotice = nil
+                showFirstRecycleTutorial = false
             }
         }
         .onChange(of: camera.capturedImage) { _, newValue in
@@ -1548,10 +1612,176 @@ struct CameraScreen: View {
                 if camera.capturedImage == nil {
                     camera.startSession()
                 }
-            case .inactive, .background:
+            case .background:
                 camera.stopSession()
+            case .inactive:
+                break
             @unknown default:
                 break
+            }
+        }
+    }
+}
+
+private struct CaptureRecycleActionAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>?
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+private struct AnalysisLoadingView: View {
+    let reduceMotion: Bool
+    @State private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @State private var tipIndex = 0
+    @State private var progressIndex = 0
+    @State private var glowPulse = false
+    @State private var tipTask: Task<Void, Never>?
+    @State private var progressTask: Task<Void, Never>?
+
+    private let logoText = "ReVive"
+    private let tips = [
+        "Rinse containers before recycling.",
+        "Flatten cardboard to save space.",
+        "Small plastics often can't be recycled."
+    ]
+    private let progressStates = [
+        "Detecting",
+        "Classifying",
+        "Checking local rules",
+    ]
+
+    private var backgroundMotionEnabled: Bool {
+        !reduceMotion && !lowPowerMode
+    }
+
+    private var textMotionEnabled: Bool {
+        !reduceMotion
+    }
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+
+            VStack(spacing: 18) {
+                ZStack {
+                    if backgroundMotionEnabled {
+                        floatingBackdrop(time: time)
+                            .transition(.opacity)
+                    }
+
+                    Circle()
+                        .fill(AppTheme.mint.opacity(0.08))
+                        .frame(width: 168, height: 168)
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.mint.opacity(0.35), lineWidth: 10)
+                        )
+                        .shadow(color: AppTheme.mint.opacity(glowPulse ? 0.6 : 0.35), radius: glowPulse ? 24 : 14, x: 0, y: 0)
+                        .animation(
+                            backgroundMotionEnabled ? .easeInOut(duration: 1.6).repeatForever(autoreverses: true) : .default,
+                            value: glowPulse
+                        )
+
+                    HStack(spacing: 1) {
+                        ForEach(Array(logoText.enumerated()), id: \.offset) { index, character in
+                            let lift = textMotionEnabled
+                                ? max(0, sin((time * 4.8) - (Double(index) * 0.75)) * 8)
+                                : 0
+                            Text(String(character))
+                                .font(AppType.title(24))
+                                .foregroundStyle(.primary.opacity(0.93))
+                                .offset(y: CGFloat(-lift))
+                        }
+                    }
+                }
+
+                Text("Analyzing your item...")
+                    .font(AppType.title(17))
+                    .foregroundStyle(.primary.opacity(0.92))
+
+                Text(progressStates[progressIndex])
+                    .font(AppType.title(14))
+                    .foregroundStyle(AppTheme.mint.opacity(0.95))
+                    .id(progressIndex)
+                    .transition(.opacity)
+
+                Text(tips[tipIndex])
+                    .font(AppType.body(12))
+                    .foregroundStyle(.primary.opacity(0.62))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+                    .id(tipIndex)
+                    .transition(.opacity)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
+            )
+        }
+        .onAppear {
+            glowPulse = true
+            startTipRotation()
+            startProgressRotation()
+        }
+        .onDisappear {
+            tipTask?.cancel()
+            tipTask = nil
+            progressTask?.cancel()
+            progressTask = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name.NSProcessInfoPowerStateDidChange)) { _ in
+            lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
+    }
+
+    @ViewBuilder
+    private func floatingBackdrop(time: TimeInterval) -> some View {
+        ZStack {
+            ForEach(0..<8, id: \.self) { index in
+                let baseX = cos(Double(index) * 0.78) * 92
+                let baseY = sin(Double(index) * 0.62) * 74
+                let driftX = sin(time * 0.8 + Double(index)) * 16
+                let driftY = cos(time * 0.6 + Double(index) * 0.9) * 12
+                Circle()
+                    .fill(AppTheme.mint.opacity(0.18))
+                    .frame(width: CGFloat(6 + (index % 3) * 4), height: CGFloat(6 + (index % 3) * 4))
+                    .offset(x: CGFloat(baseX + driftX), y: CGFloat(baseY + driftY))
+            }
+        }
+    }
+
+    private func startTipRotation() {
+        tipTask?.cancel()
+        tipTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_600_000_000)
+                guard !Task.isCancelled else { break }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    tipIndex = (tipIndex + 1) % tips.count
+                }
+            }
+        }
+    }
+
+    private func startProgressRotation() {
+        progressTask?.cancel()
+        progressTask = Task { @MainActor in
+            while !Task.isCancelled {
+                for phase in 0..<progressStates.count {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        progressIndex = phase
+                    }
+                    try? await Task.sleep(nanoseconds: 1_050_000_000)
+                    guard !Task.isCancelled else { return }
+                }
             }
         }
     }

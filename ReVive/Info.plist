@@ -6,6 +6,8 @@
 	<string>https://ihwecxhqragogndktrxb.supabase.co/</string>
 	<key>EDGE_ANON_KEY</key>
 	<string>$(EDGE_ANON_KEY)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>SHOW_TECH_ERRORS</key>
 	<string>$(SHOW_TECH_ERRORS)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

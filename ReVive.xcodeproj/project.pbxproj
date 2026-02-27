@@ -288,6 +288,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ReVive/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ReVive;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "The camera is used to identify objects.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Use your location to fill in your ZIP code for local recycling guidance.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "It is saving the selected object to camera roll";
@@ -328,6 +330,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ReVive/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ReVive;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "The camera is used to identify objects.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Use your location to fill in your ZIP code for local recycling guidance.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "It is saving the selected object to camera roll";

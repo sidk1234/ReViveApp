@@ -14,6 +14,10 @@ struct BinView: View {
     @State private var showCarbonSavedOverlay: Bool = false
     @State private var carbonSavedOverlayText: String = ""
     @State private var searchText: String = ""
+    @State private var showMarkAsRecycledTutorial: Bool = false
+    @State private var isMainTutorialOverlayActive: Bool = false
+
+    private let markAsRecycledTutorialKey = "revive.tutorial.bin.markAsRecycled"
 
     private var totalCount: Int {
         history.entries.count
@@ -25,6 +29,14 @@ struct BinView: View {
 
     private var recycledCount: Int {
         history.entries.filter { $0.recycleStatus == .recycled }.count
+    }
+
+    private var totalCarbonSavedKg: Double {
+        history.entries
+            .filter { $0.recycleStatus == .recycled }
+            .reduce(0) { partial, entry in
+                partial + max(0, entry.carbonSavedKg)
+            }
     }
 
     private var recyclablePendingEntries: [HistoryEntry] {
@@ -47,6 +59,14 @@ struct BinView: View {
 
     private var filteredMarkableCount: Int {
         filteredEntries.filter { $0.recyclable && $0.recycleStatus != .recycled }.count
+    }
+
+    private var firstMarkableEntryID: UUID? {
+        filteredEntries.first(where: { $0.recyclable && $0.recycleStatus != .recycled })?.id
+    }
+
+    private var firstMarkableEntry: HistoryEntry? {
+        filteredEntries.first(where: { $0.recyclable && $0.recycleStatus != .recycled })
     }
 
     var body: some View {
@@ -86,7 +106,12 @@ struct BinView: View {
                         }
                     }
 
-                    BinStatsRow(totalCount: totalCount, markedCount: markedCount, recycledCount: recycledCount)
+                    BinStatsRow(
+                        totalCount: totalCount,
+                        markedCount: markedCount,
+                        recycledCount: recycledCount,
+                        totalCarbonSavedKg: totalCarbonSavedKg
+                    )
                     BinSearchBar(text: $searchText)
 
                     if isSelectionMode {
@@ -152,6 +177,10 @@ struct BinView: View {
                                         }
                                     }
                                 )
+                                .anchorPreference(key: BinMarkAsRecycledAnchorKey.self, value: .bounds) { anchor in
+                                    guard entry.id == firstMarkableEntryID else { return nil }
+                                    return anchor
+                                }
                             }
                         }
                     }
@@ -256,14 +285,62 @@ struct BinView: View {
                 }
             }
         }
+        .overlayPreferenceValue(BinMarkAsRecycledAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if showMarkAsRecycledTutorial,
+                   !isMainTutorialOverlayActive,
+                   !isSelectionMode,
+                   selectedEntry == nil,
+                   let anchor {
+                    let targetRect = proxy[anchor]
+                    TargetTutorialOverlay(
+                        targetRect: targetRect,
+                        title: "Mark As Recycled",
+                        message: "Tap this highlighted item, then confirm that you've recycled it to move it out of pending Bin status.",
+                        buttonTitle: nil,
+                        onDone: nil,
+                        highlightStyle: .roundedRect(cornerRadius: 20, padding: 8),
+                        showDirectionalArrow: false,
+                        showPressIndicator: true,
+                        onTargetTap: {
+                            if let entry = firstMarkableEntry {
+                                selectedEntry = entry
+                                completeMarkAsRecycledTutorialIfNeeded()
+                            }
+                        }
+                    )
+                    .transition(.opacity)
+                    .zIndex(400)
+                }
+            }
+        }
         .animation(.easeInOut(duration: 0.2), value: showBulkRecycleConfirm)
         .animation(.easeInOut(duration: 0.2), value: showCarbonSavedOverlay)
+        .animation(.easeInOut(duration: 0.2), value: showMarkAsRecycledTutorial)
+        .onAppear {
+            updateMarkAsRecycledTutorialVisibility()
+        }
         .onChange(of: history.entries.map(\.id)) { _, ids in
             let idSet = Set(ids)
             selectedEntryIDs = selectedEntryIDs.intersection(idSet)
             if selectedEntryIDs.isEmpty, isSelectionMode, filteredMarkableCount == 0 {
                 isSelectionMode = false
             }
+            updateMarkAsRecycledTutorialVisibility()
+        }
+        .onChange(of: searchText) { _, _ in
+            updateMarkAsRecycledTutorialVisibility()
+        }
+        .onChange(of: isSelectionMode) { _, _ in
+            updateMarkAsRecycledTutorialVisibility()
+        }
+        .onChange(of: selectedEntry?.id) { _, _ in
+            updateMarkAsRecycledTutorialVisibility()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveMainTutorialVisibilityChanged)) { note in
+            guard let isVisible = note.object as? Bool else { return }
+            isMainTutorialOverlayActive = isVisible
+            updateMarkAsRecycledTutorialVisibility()
         }
     }
 
@@ -276,6 +353,7 @@ struct BinView: View {
         let totalSaved = max(0, updated.carbonSavedKg)
         showCarbonSavedToast(totalSavedKg: totalSaved)
         triggerRecycledConfetti()
+        completeMarkAsRecycledTutorialIfNeeded()
     }
 
     private func toggleEntrySelection(_ entryID: UUID) {
@@ -306,6 +384,39 @@ struct BinView: View {
         if didMarkAny {
             showCarbonSavedToast(totalSavedKg: totalSavedKg)
             triggerRecycledConfetti()
+            completeMarkAsRecycledTutorialIfNeeded()
+        }
+    }
+
+    private func updateMarkAsRecycledTutorialVisibility() {
+        let hasSeenTutorial = UserDefaults.standard.bool(forKey: markAsRecycledTutorialKey)
+        let hasMarkableItem = firstMarkableEntryID != nil
+        let shouldShow = !hasSeenTutorial
+            && hasMarkableItem
+            && !isMainTutorialOverlayActive
+            && !isSelectionMode
+            && selectedEntry == nil
+
+        if shouldShow != showMarkAsRecycledTutorial {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showMarkAsRecycledTutorial = shouldShow
+            }
+        }
+    }
+
+    private func completeMarkAsRecycledTutorialIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: markAsRecycledTutorialKey) else {
+            if showMarkAsRecycledTutorial {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showMarkAsRecycledTutorial = false
+                }
+            }
+            return
+        }
+
+        UserDefaults.standard.set(true, forKey: markAsRecycledTutorialKey)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showMarkAsRecycledTutorial = false
         }
     }
 
@@ -337,6 +448,14 @@ struct BinView: View {
             return String(format: "%.2f kg CO2e", clamped)
         }
         return String(format: "%.1f kg CO2e", clamped)
+    }
+}
+
+private struct BinMarkAsRecycledAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>?
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }
 
@@ -434,13 +553,25 @@ private struct BinStatsRow: View {
     let totalCount: Int
     let markedCount: Int
     let recycledCount: Int
+    let totalCarbonSavedKg: Double
 
     var body: some View {
-        HStack(spacing: 10) {
+        let columns = [GridItem(.adaptive(minimum: 132), spacing: 10)]
+
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
             BinStatCard(title: "Items", value: "\(totalCount)")
             BinStatCard(title: "Marked", value: "\(markedCount)")
             BinStatCard(title: "Recycled", value: "\(recycledCount)")
+            BinStatCard(title: "CO2e Saved", value: formatCarbon(totalCarbonSavedKg))
         }
+    }
+
+    private func formatCarbon(_ value: Double) -> String {
+        let clamped = max(0, value)
+        if clamped < 1 {
+            return String(format: "%.2f kg", clamped)
+        }
+        return String(format: "%.1f kg", clamped)
     }
 }
 

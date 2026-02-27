@@ -230,6 +230,16 @@ struct GuestQuota: Codable, Equatable {
     let limit: Int
 }
 
+private struct SubscriptionStateRow: Decodable {
+    let userId: String
+    let isPro: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case isPro = "is_pro"
+    }
+}
+
 final class SupabaseService {
     enum ServiceError: Error {
         case invalidResponse
@@ -533,12 +543,30 @@ final class SupabaseService {
         let isProSubscriber =
             boolFromMetadata(
                 appMetadata,
-                keys: ["is_pro_subscriber", "subscription_active", "is_pro", "pro_active"]
+                keys: [
+                    "is_pro_subscriber",
+                    "subscription_active",
+                    "is_pro",
+                    "pro_active",
+                    "pro_status",
+                    "is_subscribed",
+                    "paid_member"
+                ]
             )
             ?? boolFromMetadata(
                 metadata,
-                keys: ["is_pro_subscriber", "subscription_active", "is_pro", "pro_active"]
+                keys: [
+                    "is_pro_subscriber",
+                    "subscription_active",
+                    "is_pro",
+                    "pro_active",
+                    "pro_status",
+                    "is_subscribed",
+                    "paid_member"
+                ]
             )
+            ?? proStatusFromMetadata(appMetadata)
+            ?? proStatusFromMetadata(metadata)
         let analysisQuotaRemaining = intFromMetadata(
             metadata,
             keys: ["analysis_quota_remaining", "signed_in_quota_remaining", "free_quota_remaining"]
@@ -580,6 +608,64 @@ final class SupabaseService {
                 if ["true", "1", "yes", "y"].contains(normalized) { return true }
                 if ["false", "0", "no", "n"].contains(normalized) { return false }
             }
+        }
+        return nil
+    }
+
+    private func proStatusFromMetadata(_ metadata: [String: Any]?) -> Bool? {
+        guard let metadata else { return nil }
+        let keys = [
+            "subscription_status",
+            "stripe_subscription_status",
+            "stripe_status",
+            "billing_status",
+            "plan",
+            "tier",
+            "membership",
+            "account_tier",
+            "subscription_tier",
+            "current_plan",
+            "role",
+            "subscription"
+        ]
+        for key in keys {
+            guard let value = metadata[key] else { continue }
+            if let boolValue = value as? Bool {
+                return boolValue
+            }
+            if let intValue = value as? Int {
+                return intValue != 0
+            }
+            if let stringValue = value as? String {
+                if let parsed = parseProStatus(from: stringValue) { return parsed }
+                continue
+            }
+            if let dictValue = value as? [String: Any] {
+                if let status = dictValue["status"] as? String,
+                   let parsed = parseProStatus(from: status) {
+                    return parsed
+                }
+                if let plan = dictValue["plan"] as? String,
+                   let parsed = parseProStatus(from: plan) {
+                    return parsed
+                }
+                if let tier = dictValue["tier"] as? String,
+                   let parsed = parseProStatus(from: tier) {
+                    return parsed
+                }
+            }
+        }
+        return nil
+    }
+
+    private func parseProStatus(from value: String) -> Bool? {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.isEmpty { return nil }
+        if ["pro", "paid", "premium", "active", "trialing", "subscriber", "subscribed", "monthly", "annual", "true", "1", "yes", "y"].contains(normalized) {
+            return true
+        }
+        if ["free", "basic", "inactive", "canceled", "cancelled", "unpaid", "none", "false", "0", "no", "n"].contains(normalized) {
+            return false
         }
         return nil
     }
@@ -647,6 +733,55 @@ final class SupabaseService {
             ["is_pro_subscriber": isActive],
             accessToken: accessToken
         )
+    }
+
+    func fetchSubscriptionState(userId: String, accessToken: String) async throws -> Bool? {
+        let url = config.url.appendingPathComponent("rest/v1/user_subscription_state")
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "select", value: "user_id,is_pro"),
+            URLQueryItem(name: "user_id", value: "eq.\(userId)"),
+            URLQueryItem(name: "limit", value: "1")
+        ]
+        guard let requestURL = components?.url else { throw ServiceError.invalidCallback }
+
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "GET"
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw ServiceError.httpError(http.statusCode, msg)
+        }
+        let rows = try jsonDecoder.decode([SubscriptionStateRow].self, from: data)
+        return rows.first?.isPro
+    }
+
+    func fetchSignedInMonthlyUsageCount(userId: String, monthKey: String, accessToken: String) async throws -> Int {
+        let url = config.url.appendingPathComponent("rest/v1/rpc/get_signed_in_monthly_usage_count")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        let body: [String: Any] = [
+            "p_user_id": userId,
+            "p_month_key": monthKey
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw ServiceError.httpError(http.statusCode, msg)
+        }
+        let raw = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
+        return max(0, Int(raw) ?? 0)
     }
 
     private func updateUserMetadata(_ metadata: [String: Any], accessToken: String) async throws {

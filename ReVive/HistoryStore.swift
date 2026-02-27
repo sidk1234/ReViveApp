@@ -637,7 +637,8 @@ final class HistoryStore: ObservableObject {
     }
 
     private func saveImage(_ image: UIImage, id: UUID) -> String? {
-        guard let data = image.compressedJPEGData(maxDimension: 1600, quality: 0.72) else { return nil }
+        // Keep local write lightweight to avoid UI hitching during add-to-bin flow.
+        guard let data = image.compressedJPEGData(maxDimension: 1200, quality: 0.62) else { return nil }
         let url = imagesDirectoryURL().appendingPathComponent("\(id.uuidString).jpg")
         do {
             try data.write(to: url, options: [.atomic])

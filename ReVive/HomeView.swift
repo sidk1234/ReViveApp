@@ -10,27 +10,18 @@ import Combine
 
 
 struct AccountView: View {
+    var guestHeaderInset: CGFloat = 0
     @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var history: HistoryStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var showEditProfile = false
     @State private var showSettings = false
-    @State private var showDeleteAlert = false
     @State private var isSigningOut = false
     @State private var isStartingCheckout = false
     @State private var isStartingPortal = false
     @State private var billingMessage: String?
     @State private var billingStatusScreen: BillingStatusScreen?
-
-    private var guestBannerVisible: Bool {
-        !auth.isSignedIn && auth.guestQuota != nil
-    }
-
-    private func guestSettingsTopPadding(safeTopInset: CGFloat) -> CGFloat {
-        guard guestBannerVisible else { return 12 }
-        // Match capture-page X position (~162pt from screen top) while accounting for safe-area insets here.
-        return max(12, 162 - safeTopInset)
-    }
+    @State private var challengeXP: Int = ChallengeProgression.currentXP()
 
     private var recyclableCount: Int {
         history.entries.filter { $0.recycleStatus == .recycled }.count
@@ -59,6 +50,10 @@ struct AccountView: View {
         return index + 1
     }
 
+    private var challengeLevel: Int {
+        ChallengeProgression.level(for: challengeXP)
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -68,7 +63,7 @@ struct AccountView: View {
                 if auth.isSignedIn {
                     signedInContent
                 } else {
-                    GeometryReader { proxy in
+                    GeometryReader { _ in
                         LoginScreen()
                         VStack {
                             HStack {
@@ -84,8 +79,8 @@ struct AccountView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .padding(.trailing, 24)
-                                .padding(.top, guestSettingsTopPadding(safeTopInset: proxy.safeAreaInsets.top))
-                                .animation(.spring(response: 0.35, dampingFraction: 0.9), value: guestBannerVisible)
+                                .padding(.top, 12 + guestHeaderInset)
+                                .animation(.easeInOut(duration: 0.2), value: guestHeaderInset)
                             }
                             Spacer()
                         }
@@ -145,6 +140,12 @@ struct AccountView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .reviveBillingError)) { _ in
             billingStatusScreen = .error("Payment was canceled or failed.")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reviveChallengeProgressUpdated)) { _ in
+            refreshChallengeProgress()
+        }
+        .onAppear {
+            refreshChallengeProgress()
         }
         .fullScreenCover(item: $billingStatusScreen) { screen in
             BillingResultView(screen: screen) {
@@ -220,8 +221,6 @@ struct AccountView: View {
                     .foregroundStyle(.primary)
 
                 badgeGrid
-
-                deleteAccountCard
             }
             .padding(.horizontal, 28)
             .padding(.top, 28)
@@ -326,7 +325,7 @@ struct AccountView: View {
                     Text("CO2e Saved")
                         .font(AppType.body(12))
                         .foregroundStyle(.primary.opacity(0.6))
-                    Text("Level \(currentLevel)/\(badges.count)")
+                    Text("Level \(challengeLevel) • \(challengeXP) XP")
                         .font(AppType.body(11))
                         .foregroundStyle(.primary.opacity(0.6))
                 }
@@ -412,12 +411,14 @@ struct AccountView: View {
                 startStripeCheckout()
             } label: {
                 HStack {
+                    Spacer().frame(width: 5)
                     Image(systemName: "crown.fill")
                     Text(auth.hasActiveSubscription ? "Manage subscription" : "Upgrade plan")
                         .font(AppType.title(15))
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .bold))
+                    Spacer().frame(width: 6)
                 }
                 .foregroundStyle(.black)
                 .frame(maxWidth: .infinity)
@@ -634,43 +635,10 @@ struct AccountView: View {
         }
     }
 
-    private var deleteAccountCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Delete account")
-                .font(AppType.title(16))
-                .foregroundStyle(.primary)
-
-            Text("Delete your account and all associated data.")
-                .font(AppType.body(12))
-                .foregroundStyle(.primary.opacity(0.7))
-
-            Button {
-                showDeleteAlert = true
-            } label: {
-                HStack {
-                    Image(systemName: "trash")
-                    Text(auth.isLoading ? "Deleting..." : "Delete account")
-                        .font(AppType.title(14))
-                }
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(auth.isLoading)
-            .alert("Delete account?", isPresented: $showDeleteAlert) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
-                    auth.deleteAccount()
-                }
-            } message: {
-                Text("This action permanently deletes your account and cannot be undone.")
-            }
-        }
-        .padding(16)
-        .accountCard()
+    private func refreshChallengeProgress() {
+        challengeXP = ChallengeProgression.currentXP()
     }
+
 }
 
 private enum BillingStatusScreen: Identifiable {
@@ -2031,7 +1999,10 @@ struct SettingsView: View {
     @StateObject private var locationManager = LocationManager()
     @State private var defaultZipInput: String = ""
     @FocusState private var zipFocused: Bool
-    @State private var showDeleteAlert = false
+
+    private let homeChallengeTutorialKey = "revive.tutorial.home.challengeFlow"
+    private let captureFirstRecycleTutorialKey = "revive.tutorial.capture.firstRecycleAction"
+    private let binMarkAsRecycledTutorialKey = "revive.tutorial.bin.markAsRecycled"
 
     private var appearanceBinding: Binding<AppAppearanceMode> {
         Binding(
@@ -2054,6 +2025,13 @@ struct SettingsView: View {
         )
     }
 
+    private var reduceMotionBinding: Binding<Bool> {
+        Binding(
+            get: { auth.reduceMotionEnabled },
+            set: { auth.updateReduceMotion($0) }
+        )
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -2069,6 +2047,10 @@ struct SettingsView: View {
                         locationCard
                         appearanceCard
                         captureCard
+                        if auth.isSignedIn {
+                            accountCard
+                        }
+                        helpCard
 
                         if !auth.isSignedIn {
                             Text("Sign in to sync preferences across devices.")
@@ -2211,8 +2193,178 @@ struct SettingsView: View {
                 .foregroundStyle(.primary)
                 .tint(AppTheme.mint)
 
+            Toggle("Reduce motion", isOn: reduceMotionBinding)
+                .font(AppType.body(13))
+                .foregroundStyle(.primary)
+                .tint(AppTheme.mint)
+
         }
         return settingsCard(content)
+    }
+
+    private var accountCard: some View {
+        let content = VStack(alignment: .leading, spacing: 12) {
+            Text("Account")
+                .font(AppType.title(16))
+                .foregroundStyle(.primary)
+
+            NavigationLink {
+                AccountSettingsView()
+                    .environmentObject(auth)
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Danger Zone")
+                            .font(AppType.title(14))
+                            .foregroundStyle(.primary)
+                        Text("Delete account controls")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.primary.opacity(0.7))
+                }
+                .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+        }
+        return settingsCard(content)
+    }
+
+    private var helpCard: some View {
+        let content = VStack(alignment: .leading, spacing: 12) {
+            Text("Help")
+                .font(AppType.title(16))
+                .foregroundStyle(.primary)
+
+            Button {
+                replayMainTabTutorial()
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Beginner Tips")
+                            .font(AppType.title(14))
+                        Text("Replay the tab walkthrough overlay.")
+                            .font(AppType.body(11))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+                    Spacer()
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                replayHomeChallengeTutorial()
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Challenges Tutorial")
+                            .font(AppType.title(14))
+                        Text("Home challenges + progress highlight.")
+                            .font(AppType.body(11))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+                    Spacer()
+                    Image(systemName: "flag.checkered.2.crossed")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                replayCaptureRecycleTutorial()
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Capture Tutorial")
+                            .font(AppType.title(14))
+                        Text("Mark for Recycle step on Capture.")
+                            .font(AppType.body(11))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+                    Spacer()
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                replayBinMarkTutorial()
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Bin Tutorial")
+                            .font(AppType.title(14))
+                        Text("Mark as Recycled step in Bin.")
+                            .font(AppType.body(11))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+                    Spacer()
+                    Image(systemName: "trash.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                resetAllTutorials()
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reset All Tutorials")
+                            .font(AppType.title(14))
+                        Text("Clears tutorial progress and opens Beginner Tips.")
+                            .font(AppType.body(11))
+                            .foregroundStyle(.primary.opacity(0.7))
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.counterclockwise.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+
+            Text("Challenges tutorial starts on Home after the Challenges card appears.")
+                .font(AppType.body(11))
+                .foregroundStyle(.primary.opacity(0.62))
+        }
+        return settingsCard(content)
+    }
+
+    private func replayMainTabTutorial() {
+        NotificationCenter.default.post(name: .reviveOpenTutorial, object: nil)
+    }
+
+    private func replayHomeChallengeTutorial() {
+        UserDefaults.standard.removeObject(forKey: homeChallengeTutorialKey)
+        NotificationCenter.default.post(name: .reviveOpenHome, object: nil)
+    }
+
+    private func replayCaptureRecycleTutorial() {
+        UserDefaults.standard.removeObject(forKey: captureFirstRecycleTutorialKey)
+        NotificationCenter.default.post(name: .reviveOpenCapture, object: nil)
+    }
+
+    private func replayBinMarkTutorial() {
+        UserDefaults.standard.removeObject(forKey: binMarkAsRecycledTutorialKey)
+        NotificationCenter.default.post(name: .reviveOpenBin, object: nil)
+    }
+
+    private func resetAllTutorials() {
+        UserDefaults.standard.removeObject(forKey: homeChallengeTutorialKey)
+        UserDefaults.standard.removeObject(forKey: captureFirstRecycleTutorialKey)
+        UserDefaults.standard.removeObject(forKey: binMarkAsRecycledTutorialKey)
+        replayMainTabTutorial()
     }
 
 
@@ -2228,6 +2380,263 @@ struct SettingsView: View {
             )
             .transaction { $0.disablesAnimations = true }
     }
+}
+
+struct AccountSettingsView: View {
+    @EnvironmentObject private var auth: AuthStore
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var showPasswordStep = false
+    @State private var showFinalDeleteDialog = false
+    @State private var deletePassword = ""
+    @State private var showPasswordError = false
+    @FocusState private var passwordFocused: Bool
+
+    var body: some View {
+        ZStack {
+            AppTheme.backgroundGradient(colorScheme)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Text("Account")
+                            .font(AppType.display(30))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Danger Zone")
+                            .font(AppType.title(16))
+                            .foregroundStyle(.red.opacity(0.9))
+
+                        Text("Deleting your account removes profile data, impact history, and synced records.")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.75))
+
+                        if !auth.canEditEmailPassword {
+                            Text("Password verification is only available for email-password accounts. Social accounts can still delete after confirmation.")
+                                .font(AppType.body(11))
+                                .foregroundStyle(.primary.opacity(0.65))
+                        }
+
+                        Button {
+                            showPasswordStep = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "trash")
+                                Text("Delete Account")
+                                    .font(AppType.title(14))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.red.opacity(0.85))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(auth.isLoading)
+
+                        if let error = auth.displayErrorMessage, !error.isEmpty {
+                            Text(error)
+                                .font(AppType.body(12))
+                                .foregroundStyle(.red.opacity(0.95))
+                        }
+                    }
+                    .padding(16)
+                    .accountCard()
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 28)
+                .padding(.bottom, 120)
+            }
+        }
+        .sheet(isPresented: $showPasswordStep) {
+            NavigationStack {
+                ZStack {
+                    AppTheme.backgroundGradient(colorScheme)
+                        .ignoresSafeArea()
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Step 2 of 3")
+                            .font(AppType.body(12))
+                            .foregroundStyle(.primary.opacity(0.6))
+
+                        Text("Confirm password")
+                            .font(AppType.title(20))
+                            .foregroundStyle(.primary)
+
+                        SecureField("Password", text: $deletePassword)
+                            .textInputAutocapitalization(.never)
+                            .disableAutocorrection(true)
+                            .focused($passwordFocused)
+                            .padding(.horizontal, 14)
+                            .frame(height: 48)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+                            )
+
+                        if showPasswordError {
+                            Text("Enter your password before continuing.")
+                                .font(AppType.body(12))
+                                .foregroundStyle(.red.opacity(0.95))
+                        }
+
+                        Button("Continue") {
+                            let trimmed = deletePassword.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else {
+                                showPasswordError = true
+                                return
+                            }
+                            showPasswordError = false
+                            showPasswordStep = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                showFinalDeleteDialog = true
+                            }
+                        }
+                        .font(AppType.title(15))
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(AppTheme.mint))
+                        .buttonStyle(.plain)
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 26)
+                    .padding(.bottom, 22)
+                }
+                .onAppear {
+                    passwordFocused = true
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Close") {
+                            showPasswordStep = false
+                        }
+                    }
+                }
+            }
+        }
+        .alert("Final confirmation", isPresented: $showFinalDeleteDialog) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                auth.deleteAccount(confirmPassword: deletePassword)
+                deletePassword = ""
+            }
+        } message: {
+            Text("Step 3 of 3: This permanently deletes your account and cannot be undone.")
+        }
+    }
+}
+
+struct TutorialWalkthroughView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var stepIndex = 0
+
+    private let steps: [TutorialStep] = [
+        .init(
+            title: "Step 1: Capture",
+            body: "Scan an item from the Capture tab. Tap the object highlight before running analysis.",
+            icon: "camera.viewfinder"
+        ),
+        .init(
+            title: "Step 2: View Product Info",
+            body: "Review material, recycling decision, bin type, and notes to understand the result.",
+            icon: "info.circle.fill"
+        ),
+        .init(
+            title: "Step 3: Mark as Recycled",
+            body: "Add it to Bin, then mark it as recycled to log impact and earn points.",
+            icon: "checkmark.seal.fill"
+        ),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppTheme.backgroundGradient(.dark)
+                    .ignoresSafeArea()
+
+                VStack(spacing: 18) {
+                    TabView(selection: $stepIndex) {
+                        ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                            VStack(spacing: 14) {
+                                Image(systemName: step.icon)
+                                    .font(.system(size: 46, weight: .bold))
+                                    .foregroundStyle(AppTheme.mint)
+                                Text(step.title)
+                                    .font(AppType.title(24))
+                                    .foregroundStyle(.primary)
+                                    .multilineTextAlignment(.center)
+                                Text(step.body)
+                                    .font(AppType.body(15))
+                                    .foregroundStyle(.primary.opacity(0.82))
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: 320)
+                            }
+                            .tag(index)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 24)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .frame(maxHeight: 330)
+
+                    HStack(spacing: 8) {
+                        ForEach(0..<steps.count, id: \.self) { index in
+                            Capsule()
+                                .fill(index == stepIndex ? AppTheme.mint : Color.white.opacity(0.25))
+                                .frame(width: index == stepIndex ? 20 : 8, height: 8)
+                        }
+                    }
+
+                    Button(stepIndex == steps.count - 1 ? "Done" : "Next") {
+                        if stepIndex == steps.count - 1 {
+                            dismiss()
+                        } else {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                stepIndex += 1
+                            }
+                        }
+                    }
+                    .font(AppType.title(16))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 26)
+                    .padding(.vertical, 12)
+                    .background(Capsule().fill(AppTheme.mint))
+                    .buttonStyle(.plain)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 30)
+                .padding(.bottom, 28)
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .foregroundStyle(.primary)
+                }
+            }
+        }
+    }
+}
+
+private struct TutorialStep {
+    let title: String
+    let body: String
+    let icon: String
 }
 
 private struct Badge: Identifiable {

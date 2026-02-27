@@ -12,6 +12,44 @@ import CoreImage.CIFilterBuiltins
 import UIKit
 import Photos
 
+enum DisposalBin: String, CaseIterable, Codable {
+    case recycling = "Recycling"
+    case compost = "Compost"
+    case landfill = "Landfill"
+    case hazardousWaste = "Hazardous Waste"
+    case eWaste = "E-Waste"
+    case donation = "Donation"
+
+    static func from(rawValue: String?, recyclableHint: Bool?) -> DisposalBin {
+        let cleaned = (rawValue ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        if cleaned.contains("hazard") || cleaned.contains("paint") || cleaned.contains("chemical") || cleaned.contains("solvent") {
+            return .hazardousWaste
+        }
+        if cleaned.contains("e-waste") || cleaned.contains("ewaste") || cleaned.contains("electronic") || cleaned.contains("electronics") {
+            return .eWaste
+        }
+        if cleaned.contains("donat") || cleaned.contains("thrift") || cleaned.contains("charity") {
+            return .donation
+        }
+        if cleaned.contains("compost") || cleaned.contains("food scrap") || cleaned.contains("organic") || cleaned.contains("yard waste") {
+            return .compost
+        }
+        if cleaned.contains("recycl") || cleaned.contains("curbside") || cleaned.contains("blue bin") {
+            return .recycling
+        }
+        if cleaned.contains("landfill") || cleaned.contains("trash") || cleaned.contains("garbage") {
+            return .landfill
+        }
+        if cleaned.isEmpty || cleaned == "unknown" || cleaned == "n/a" || cleaned == "na" {
+            return recyclableHint == true ? .recycling : .landfill
+        }
+        return recyclableHint == true ? .recycling : .landfill
+    }
+}
+
 final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
 
     // MARK: - Public state
@@ -27,6 +65,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     @Published var noItemDetected: Bool = false
     @Published var hapticsEnabled: Bool = true
     @Published var zoomFactor: CGFloat = 1.0
+    @Published var isUsingFrontCamera: Bool = false
 
     private var latestAnalysisRequestID = UUID()
 
@@ -43,6 +82,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     private let output = AVCapturePhotoOutput()
     private var isConfigured = false
     private var videoDevice: AVCaptureDevice?
+    private var videoInput: AVCaptureDeviceInput?
+    private var currentCameraPosition: AVCaptureDevice.Position = .back
 
     // MARK: - CI
     private let ciContext = CIContext()
@@ -56,6 +97,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     private var instanceMasks: [InstanceMaskItem] = []
     private var selectedInstanceIndex: Int?
     private var selectedMaskCI: CIImage?
+    private var latestSelectedPreviewImage: UIImage?
 
     // Keep the selected mask + captured CI for export (aligned to photo extent)
     private var capturedCI: CIImage?
@@ -88,18 +130,23 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         session.beginConfiguration()
         session.sessionPreset = .photo
 
-        guard let device = AVCaptureDevice.default(for: .video) else {
+        guard let device = cameraDevice(for: currentCameraPosition) else {
             session.commitConfiguration()
             setCameraError("Camera unavailable.")
             return
         }
         videoDevice = device
+        currentCameraPosition = device.position
+        DispatchQueue.main.async {
+            self.isUsingFrontCamera = (device.position == .front)
+        }
         maxZoomFactor = min(device.activeFormat.videoMaxZoomFactor, maxZoomLimit)
 
         do {
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) {
                 session.addInput(input)
+                videoInput = input
             } else {
                 session.commitConfiguration()
                 setCameraError("Unable to access camera.")
@@ -122,6 +169,64 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         session.commitConfiguration()
         isConfigured = true
         clearCameraError()
+    }
+
+    private func cameraDevice(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        if let preferred = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
+            return preferred
+        }
+        return AVCaptureDevice.default(for: .video)
+    }
+
+    func switchCamera() {
+        ensureCameraAccess { [weak self] granted in
+            guard let self, granted else { return }
+            self.sessionQueue.async {
+                guard self.isConfigured else {
+                    self.configureSessionIfNeeded()
+                    return
+                }
+                guard let currentInput = self.videoInput else { return }
+
+                let newPosition: AVCaptureDevice.Position = self.currentCameraPosition == .back ? .front : .back
+                guard let newDevice = self.cameraDevice(for: newPosition) else { return }
+
+                do {
+                    let newInput = try AVCaptureDeviceInput(device: newDevice)
+                    self.session.beginConfiguration()
+                    self.session.removeInput(currentInput)
+
+                    if self.session.canAddInput(newInput) {
+                        self.session.addInput(newInput)
+                        self.videoInput = newInput
+                        self.videoDevice = newDevice
+                        self.currentCameraPosition = newPosition
+                        self.maxZoomFactor = min(newDevice.activeFormat.videoMaxZoomFactor, self.maxZoomLimit)
+                        self.minZoomFactor = 1.0
+                        self.setDeviceZoomFactorIfPossible(newDevice, factor: 1.0)
+                        DispatchQueue.main.async {
+                            self.zoomFactor = 1.0
+                            self.isUsingFrontCamera = (newPosition == .front)
+                        }
+                    } else if self.session.canAddInput(currentInput) {
+                        self.session.addInput(currentInput)
+                    }
+                    self.session.commitConfiguration()
+                } catch {
+                    // Keep existing input on failure.
+                }
+            }
+        }
+    }
+
+    private func setDeviceZoomFactorIfPossible(_ device: AVCaptureDevice, factor: CGFloat) {
+        do {
+            try device.lockForConfiguration()
+            device.videoZoomFactor = max(minZoomFactor, min(factor, maxZoomFactor))
+            device.unlockForConfiguration()
+        } catch {
+            // Ignore zoom reset failure.
+        }
     }
 
     func setZoomFactor(_ factor: CGFloat) {
@@ -176,6 +281,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     func clearCapturedImage() {
         capturedImage = nil
         capturedCI = nil
+        latestSelectedPreviewImage = nil
     }
 
     func takePhoto() {
@@ -209,6 +315,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             self.instanceMasks = []
             self.selectedInstanceIndex = nil
             self.selectedMaskCI = nil
+            self.latestSelectedPreviewImage = nil
         }
 
         buildOverlays(from: cg, uiImage: fixed, dismissCaptureOnNoItems: true)
@@ -219,13 +326,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         guard isSelected else { return }
         let requestID = UUID()
         latestAnalysisRequestID = requestID
+        latestSelectedPreviewImage = nil
 
-        let cutoutImage = makeSelectedSubjectCutout()
-        // Keep full-frame as primary for robust identification, with cutout as optional context.
-        let imageToSend: UIImage? = capturedImage ?? cutoutImage
-        let contextImage = (cutoutImage == nil || capturedImage == nil) ? nil : cutoutImage
-
-        guard let imageToSend else { return }
+        let capturedSnapshot = capturedCI
+        let maskSnapshot = selectedMaskCI
+        let imageScale = capturedImage?.scale ?? 1.0
 
         aiIsLoading = true
         aiErrorText = nil
@@ -233,10 +338,35 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         aiParsedResult = nil
 
         Task {
+            guard let capturedSnapshot, let maskSnapshot else {
+                await MainActor.run {
+                    guard self.latestAnalysisRequestID == requestID else { return }
+                    self.aiErrorText = "Couldn't isolate selected item. Please tap the item again and retry."
+                    self.aiParsedResult = nil
+                    self.aiIsLoading = false
+                }
+                return
+            }
+
+            let imageToSend = await self.buildSelectedUploadImage(
+                capturedCI: capturedSnapshot,
+                maskCI: maskSnapshot,
+                scale: imageScale
+            )
+            guard let imageToSend else {
+                await MainActor.run {
+                    guard self.latestAnalysisRequestID == requestID else { return }
+                    self.aiErrorText = "Couldn't isolate selected item. Please tap the item again and retry."
+                    self.aiParsedResult = nil
+                    self.aiIsLoading = false
+                }
+                return
+            }
+            self.latestSelectedPreviewImage = imageToSend
+
             do {
                 let text = try await analyzeImageWithRetry(
                     image: imageToSend,
-                    contextImage: contextImage,
                     itemText: nil,
                     location: location,
                     accessToken: accessToken
@@ -266,7 +396,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
 
     func previewImageForHistory() -> UIImage? {
-        return makeSelectedSubjectCutout() ?? capturedImage
+        latestSelectedPreviewImage ?? makeSelectedSubjectCutout() ?? capturedImage
     }
 
     @MainActor
@@ -432,32 +562,45 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
     
     // MARK: - Import from Photo Library
+    @MainActor
     func useImportedPhoto(_ image: UIImage) {
-        guard let fixed = image.normalizedUp(),
-              let cg = fixed.cgImage
-        else { return }
+        noItemDetected = false
+        isSelected = false
+        glowImage = nil
+        fillImage = nil
+        instanceMasks = []
+        selectedInstanceIndex = nil
+        selectedMaskCI = nil
+        latestSelectedPreviewImage = nil
+        stopSession()
 
-        // Store CI for export
-        self.capturedCI = CIImage(cgImage: cg)
-        self.noItemDetected = false
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let fixed = image.normalizedUp(),
+                  let cg = fixed.cgImage
+            else { return }
 
-        DispatchQueue.main.async {
-            self.isSelected = false
-            self.glowImage = nil
-            self.fillImage = nil
-            self.instanceMasks = []
-            self.selectedInstanceIndex = nil
-            self.selectedMaskCI = nil
+            let capturedCI = CIImage(cgImage: cg)
+            DispatchQueue.main.async {
+                self.capturedCI = capturedCI
+            }
+
+            self.buildOverlays(from: cg, uiImage: fixed, dismissCaptureOnNoItems: true)
         }
-
-        buildOverlays(from: cg, uiImage: fixed, dismissCaptureOnNoItems: true)
     }
 
 
     private func makeSelectedSubjectCutout() -> UIImage? {
         guard let capturedCI = capturedCI else { return nil }
         guard let maskCI = selectedMaskCI else { return nil }
+        let scale = capturedImage?.scale ?? 1.0
+        return makeSelectedSubjectCutout(capturedCI: capturedCI, maskCI: maskCI, scale: scale)
+    }
 
+    private func makeSelectedSubjectCutout(
+        capturedCI: CIImage,
+        maskCI: CIImage,
+        scale: CGFloat
+    ) -> UIImage? {
         let extent = capturedCI.extent
         let clearBG = CIImage(color: .clear).cropped(to: extent)
 
@@ -469,8 +612,34 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         guard let out = blend.outputImage?.cropped(to: extent) else { return nil }
         guard let outCG = ciContext.createCGImage(out, from: extent) else { return nil }
 
-        let scale = capturedImage?.scale ?? 1.0
         return UIImage(cgImage: outCG, scale: scale, orientation: .up)
+    }
+
+    private func buildSelectedUploadImage(
+        capturedCI: CIImage,
+        maskCI: CIImage,
+        scale: CGFloat
+    ) async -> UIImage? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let prepared: UIImage? = autoreleasepool {
+                    guard let cutout = self.makeSelectedSubjectCutout(
+                        capturedCI: capturedCI,
+                        maskCI: maskCI,
+                        scale: scale
+                    ) else {
+                        return nil
+                    }
+                    return cutout.resizedIfNeeded(maxDimension: 1280)
+                }
+                continuation.resume(returning: prepared)
+            }
+        }
     }
 
     private func writePNGToDocuments(_ image: UIImage) -> URL? {
@@ -705,8 +874,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             item: "unknown",
             material: "unknown",
             recyclable: false,
-            bin: "unknown",
-            notes: "No special prep.",
+            bin: DisposalBin.landfill.rawValue,
+            notes: "Reason: Not accepted for recycling. Nearest Disposal: Check local municipal website",
             carbonSavedKg: 0
         )
         return sanitizeResult(fallback, fallbackText: text)
@@ -714,14 +883,12 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
     private func analyzeImageWithRetry(
         image: UIImage,
-        contextImage: UIImage?,
         itemText: String?,
         location: LocationContext,
         accessToken: String?
     ) async throws -> String {
         return try await openAI.analyzeImage(
             image: image,
-            contextImage: contextImage,
             itemText: itemText,
             location: location,
             accessToken: accessToken
@@ -804,8 +971,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
         let item = stringValue(["item", "item_name", "product", "name", "object", "category"]) ?? "unknown"
         let material = stringValue(["material", "primary_material", "composition"]) ?? "unknown"
-        let notes = stringValue(["notes", "prep", "preparation", "instructions"]) ?? ""
-        let bin = stringValue(["bin", "disposal", "destination", "where_to_put", "container"]) ?? "unknown"
+        let notes = stringValue(["notes", "prep", "preparation", "instructions", "reason"]) ?? ""
+        let bin = stringValue(["bin", "disposal", "destination", "where_to_put", "container"]) ?? DisposalBin.landfill.rawValue
         let recyclable = boolValue(["recyclable", "is_recyclable", "accepted"]) ?? inferRecyclable(from: bin)
         let carbonSavedKg = doubleValue([
             "carbonSavedKg",
@@ -817,7 +984,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             "co2_saved",
         ]) ?? 0
 
-        if item == "unknown", material == "unknown", bin == "unknown", notes.isEmpty {
+        if item == "unknown", material == "unknown", notes.isEmpty {
             return nil
         }
 
@@ -836,8 +1003,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
         let item = map["ITEM"] ?? map["PRODUCT"] ?? map["NAME"] ?? map["OBJECT"] ?? "unknown"
         let material = map["MATERIAL"] ?? map["PRIMARY_MATERIAL"] ?? "unknown"
-        let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? ""
-        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? "unknown"
+        let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? map["REASON"] ?? ""
+        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? DisposalBin.landfill.rawValue
         let carbonSavedKg = parseCarbonValue(
             map["CARBON_SAVED_KG"] ??
             map["CARBON_KG"] ??
@@ -854,7 +1021,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             recyclable = inferRecyclable(from: bin)
         }
 
-        if item == "unknown", material == "unknown", bin == "unknown", notes.isEmpty {
+        if item == "unknown", material == "unknown", notes.isEmpty {
             return nil
         }
 
@@ -872,7 +1039,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         let normalized = text.replacingOccurrences(of: "\r", with: "\n")
         var map: [String: String] = [:]
         let fields = [
-            "NOTES", "PREP", "INSTRUCTIONS",
+            "NOTES", "PREP", "INSTRUCTIONS", "REASON",
             "ITEM", "PRODUCT", "NAME", "OBJECT",
             "MATERIAL", "PRIMARY_MATERIAL",
             "RECYCLABLE",
@@ -924,8 +1091,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         let map = extractKeyValueMap(from: text)
         let item = map["ITEM"] ?? map["PRODUCT"] ?? map["NAME"] ?? map["OBJECT"] ?? "unknown"
         let material = map["MATERIAL"] ?? map["PRIMARY_MATERIAL"] ?? "unknown"
-        let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? ""
-        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? "unknown"
+        let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? map["REASON"] ?? ""
+        let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? DisposalBin.landfill.rawValue
         let recyclable = (map["RECYCLABLE"].flatMap(parseRecyclableString)) ?? inferRecyclable(from: bin)
         let carbonSavedKg = parseCarbonValue(
             map["CARBON_SAVED_KG"] ??
@@ -936,7 +1103,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             map["CO2_SAVED"]
         ) ?? 0
 
-        if item == "unknown", material == "unknown", bin == "unknown", notes.isEmpty {
+        if item == "unknown", material == "unknown", notes.isEmpty {
             return nil
         }
         return AIRecyclingResult(
@@ -950,14 +1117,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
 
     private func inferRecyclable(from bin: String) -> Bool {
-        let lower = bin.lowercased()
-        if lower.contains("trash") || lower.contains("landfill") || lower.contains("garbage") {
-            return false
-        }
-        if lower.contains("recycle") || lower.contains("curbside") {
-            return true
-        }
-        return false
+        let mapped = DisposalBin.from(rawValue: bin, recyclableHint: nil)
+        return mapped != .landfill && mapped != .hazardousWaste
     }
 
 
@@ -987,7 +1148,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         let fallbackItem = fallbackMap["ITEM"] ?? fallbackMap["PRODUCT"] ?? fallbackMap["NAME"] ?? fallbackMap["OBJECT"]
         let fallbackMaterial = fallbackMap["MATERIAL"] ?? fallbackMap["PRIMARY_MATERIAL"]
         let fallbackBin = fallbackMap["BIN"] ?? fallbackMap["DISPOSAL"] ?? fallbackMap["DESTINATION"] ?? fallbackMap["WHERE_TO_PUT"]
-        let fallbackNotes = fallbackMap["NOTES"] ?? fallbackMap["PREP"] ?? fallbackMap["INSTRUCTIONS"]
+        let fallbackNotes = fallbackMap["NOTES"] ?? fallbackMap["PREP"] ?? fallbackMap["INSTRUCTIONS"] ?? fallbackMap["REASON"]
         let fallbackCarbon = fallbackMap["CARBON_SAVED_KG"]
             ?? fallbackMap["CARBON_KG"]
             ?? fallbackMap["CO2_SAVED_KG"]
@@ -995,19 +1156,42 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             ?? fallbackMap["CARBON"]
             ?? fallbackMap["CO2_SAVED"]
 
-        let sanitizedItem = sanitizedField(primary: result.item, fallback: fallbackItem, defaultValue: "unknown", avoidUnknownIfPossible: true)
-        let sanitizedMaterial = sanitizedField(primary: result.material, fallback: fallbackMaterial, defaultValue: "unknown", avoidUnknownIfPossible: false)
-        let sanitizedBin = sanitizedField(primary: result.bin, fallback: fallbackBin, defaultValue: "unknown", avoidUnknownIfPossible: false)
-        let sanitizedNotes = sanitizedField(primary: result.notes, fallback: fallbackNotes, defaultValue: "No special prep.", avoidUnknownIfPossible: false)
-        let itemUnknown = sanitizedItem.lowercased() == "unknown"
-        let sanitizedRecyclable = itemUnknown ? false : result.recyclable
+        let sanitizedItem = sanitizedField(primary: result.item, fallback: fallbackItem, defaultValue: "Unidentified item", avoidUnknownIfPossible: true)
+        let sanitizedMaterial = sanitizedField(primary: result.material, fallback: fallbackMaterial, defaultValue: "Mixed material", avoidUnknownIfPossible: false)
+        let lowerItem = sanitizedItem.lowercased()
+        let itemUnknown = lowerItem == "unknown" || lowerItem.contains("unidentified")
+        let normalizedBin = DisposalBin.from(rawValue: sanitizedField(primary: result.bin, fallback: fallbackBin, defaultValue: DisposalBin.landfill.rawValue, avoidUnknownIfPossible: false), recyclableHint: result.recyclable)
+
+        let hintedRecyclable = result.recyclable || inferRecyclable(from: result.bin) || inferRecyclable(from: fallbackBin ?? "")
+        var sanitizedRecyclable = itemUnknown ? false : hintedRecyclable
+        if normalizedBin == .landfill {
+            sanitizedRecyclable = false
+        }
+        if normalizedBin == .hazardousWaste {
+            sanitizedRecyclable = false
+        }
+
+        let baseNotes = sanitizedField(primary: result.notes, fallback: fallbackNotes, defaultValue: "No special prep.", avoidUnknownIfPossible: false)
+        let locationLabel = formattedDisposalLocation(from: result.bin)
+            ?? formattedDisposalLocation(from: fallbackBin)
+            ?? formattedDisposalLocation(from: result.notes)
+            ?? formattedDisposalLocation(from: fallbackNotes)
+        let reasonText = normalizedReason(from: baseNotes)
+        let sanitizedNotes: String
+        if sanitizedRecyclable {
+            sanitizedNotes = baseNotes.isEmpty ? "No special prep." : baseNotes
+        } else {
+            let location = locationLabel ?? "Nearest Disposal: Check local municipal website"
+            sanitizedNotes = "Reason: \(reasonText). \(location)"
+        }
+
         let sanitizedCarbonValue = sanitizedRecyclable ? sanitizedCarbon(primary: result.carbonSavedKg, fallback: fallbackCarbon) : 0
 
         return AIRecyclingResult(
             item: sanitizedItem,
             material: sanitizedMaterial,
             recyclable: sanitizedRecyclable,
-            bin: sanitizedBin,
+            bin: normalizedBin.rawValue,
             notes: sanitizedNotes,
             carbonSavedKg: sanitizedCarbonValue
         )
@@ -1016,7 +1200,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     private func sanitizeOutputValue(_ value: String) -> String {
         var text = value
         text = text.replacingOccurrences(of: "^[\"'`\\s]+|[\"'`\\s]+$", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?i)^(item|product|name|object|material|notes|prep|instructions|bin|disposal|destination|recyclable)\\s*[:=\\-]\\s*", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)^(item|product|name|object|material|notes|prep|instructions|reason|bin|disposal|destination|recyclable)\\s*[:=\\-]\\s*", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\[[^\\]]*\\]", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "https?://\\S+", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "www\\.\\S+", with: "", options: .regularExpression)
@@ -1030,6 +1214,62 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: "  ", with: " ")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedReason(from notes: String) -> String {
+        var reason = sanitizeOutputValue(notes)
+        reason = reason.replacingOccurrences(of: "(?i)^reason\\s*[:\\-]\\s*", with: "", options: .regularExpression)
+        reason = reason.replacingOccurrences(of: "(?i)nearest disposal\\s*:\\s*.*$", with: "", options: .regularExpression)
+        reason = reason.replacingOccurrences(of: "(?i)nearest drop[- ]off\\s*:\\s*.*$", with: "", options: .regularExpression)
+        reason = reason.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+        if reason.isEmpty || canonicalizeUnknownToken(reason) == "unknown" {
+            return "Not recyclable in local curbside programs"
+        }
+        return reason
+    }
+
+    private func formattedDisposalLocation(from raw: String?) -> String? {
+        guard let raw else { return nil }
+        var cleaned = sanitizeOutputValue(raw)
+        guard !cleaned.isEmpty else { return nil }
+        if let range = cleaned.range(of: "(?i)nearest disposal\\s*:\\s*", options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let range = cleaned.range(of: "(?i)nearest drop[- ]off\\s*:\\s*", options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if cleaned.lowercased().contains("check local") || cleaned.lowercased().contains("municipal") {
+            return "Nearest Disposal: Check local municipal website"
+        }
+        if let colon = cleaned.firstIndex(of: ":") {
+            let left = String(cleaned[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let right = String(cleaned[cleaned.index(after: colon)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !left.isEmpty, !right.isEmpty, isLikelyAddress(right) {
+                return "\(left): \(right)"
+            }
+        }
+        if isLikelyAddress(cleaned) {
+            return "Nearest Disposal: \(cleaned)"
+        }
+        return nil
+    }
+
+    private func isLikelyAddress(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let hasNumber = lower.range(of: "\\b\\d{1,6}\\b", options: .regularExpression) != nil
+        let hasStreetToken = lower.contains(" st")
+            || lower.contains(" street")
+            || lower.contains(" ave")
+            || lower.contains(" avenue")
+            || lower.contains(" rd")
+            || lower.contains(" road")
+            || lower.contains(" blvd")
+            || lower.contains(" drive")
+            || lower.contains(" dr")
+            || lower.contains(" lane")
+            || lower.contains(" ln")
+            || lower.contains(" way")
+        return hasNumber && hasStreetToken
     }
 
     private func sanitizedField(
@@ -1192,6 +1432,7 @@ struct AIRecyclingResult: Codable, Equatable {
         case recyclable
         case bin
         case notes
+        case reason
         case carbonSavedKg
         case carbon_saved_kg
         case carbon_kg
@@ -1207,7 +1448,12 @@ struct AIRecyclingResult: Codable, Equatable {
         material = try container.decode(String.self, forKey: .material)
         recyclable = try container.decode(Bool.self, forKey: .recyclable)
         bin = try container.decode(String.self, forKey: .bin)
-        notes = try container.decode(String.self, forKey: .notes)
+        let decodedNotes = try container.decodeIfPresent(String.self, forKey: .notes)
+        let decodedReason = try container.decodeIfPresent(String.self, forKey: .reason)
+        let resolvedNotes = (decodedNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? decodedNotes
+            : decodedReason
+        notes = resolvedNotes ?? "No special prep."
 
         let carbonCandidates: [Double?] = [
             try? container.decode(Double.self, forKey: .carbonSavedKg),

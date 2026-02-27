@@ -10,6 +10,7 @@ struct LeaderboardView: View {
     @EnvironmentObject private var auth: AuthStore
     @StateObject private var store = LeaderboardStore()
     @Environment(\.colorScheme) private var colorScheme
+    @State private var hasRequestedInitialLoad = false
 
     var body: some View {
         ZStack {
@@ -33,50 +34,93 @@ struct LeaderboardView: View {
                         .foregroundStyle(.primary.opacity(0.7))
                 }
 
-                if store.isLoading {
-                    ProgressView()
-                        .tint(.primary)
-                } else if let error = store.errorMessage {
-                    Text(error)
-                        .font(AppType.body(13))
-                        .foregroundStyle(.primary.opacity(0.7))
-                } else if store.entries.isEmpty {
-                    Spacer()
-                    VStack(spacing: 12) {
-                        Image(systemName: "trophy.fill")
-                            .font(.system(size: 38, weight: .bold))
-                            .foregroundStyle(AppTheme.accentGradient)
-                        Text("No leaderboard data yet")
-                            .font(AppType.title(16))
-                            .foregroundStyle(.primary)
-                        Text("Sign in and start scanning to appear here.")
+                Group {
+                    if shouldShowInitialLoading {
+                        LeaderboardLoadingPlaceholder()
+                            .transition(.opacity)
+                    } else if let error = store.errorMessage {
+                        Text(error)
                             .font(AppType.body(13))
                             .foregroundStyle(.primary.opacity(0.7))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(24)
-                    .staticCard(cornerRadius: 26)
-                    Spacer()
-                } else {
-                    ScrollView {
+                            .transition(.opacity)
+                    } else if store.entries.isEmpty {
+                        Spacer()
                         VStack(spacing: 12) {
-                            ForEach(Array(store.entries.enumerated()), id: \.element.id) { index, entry in
-                                LeaderboardRow(rank: index + 1, entry: entry)
+                            Image(systemName: "trophy.fill")
+                                .font(.system(size: 38, weight: .bold))
+                                .foregroundStyle(AppTheme.accentGradient)
+                            Text("No leaderboard data yet")
+                                .font(AppType.title(16))
+                                .foregroundStyle(.primary)
+                            Text("Sign in and start scanning to appear here.")
+                                .font(AppType.body(13))
+                                .foregroundStyle(.primary.opacity(0.7))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(24)
+                        .staticCard(cornerRadius: 26)
+                        .transition(.opacity)
+                        Spacer()
+                    } else {
+                        ZStack(alignment: .topTrailing) {
+                            ScrollView {
+                                VStack(spacing: 12) {
+                                    ForEach(Array(store.entries.enumerated()), id: \.element.id) { index, entry in
+                                        LeaderboardRow(rank: index + 1, entry: entry)
+                                    }
+                                }
+                                .padding(.top, 4)
+                            }
+
+                            if store.isLoading {
+                                ProgressView()
+                                    .tint(.primary)
+                                    .padding(8)
+                                    .background(Circle().fill(.ultraThinMaterial))
+                                    .padding(.top, 4)
+                                    .transition(.opacity)
                             }
                         }
-                        .padding(.top, 4)
+                        .transition(.opacity)
                     }
                 }
+                .animation(.easeInOut(duration: 0.2), value: shouldShowInitialLoading)
+                .animation(.easeInOut(duration: 0.2), value: store.isLoading)
+                .animation(.easeInOut(duration: 0.2), value: store.entries.count)
+                .animation(.easeInOut(duration: 0.2), value: store.errorMessage ?? "")
             }
             .padding(.horizontal, 28)
             .padding(.top, 28)
         }
         .onAppear {
+            hasRequestedInitialLoad = true
             store.refresh(accessToken: auth.session?.accessToken)
         }
         .onChange(of: auth.isSignedIn) { _, _ in
             store.refresh(accessToken: auth.session?.accessToken)
         }
+    }
+
+    private var shouldShowInitialLoading: Bool {
+        (!hasRequestedInitialLoad || store.isLoading) &&
+        store.entries.isEmpty &&
+        store.errorMessage == nil
+    }
+}
+
+private struct LeaderboardLoadingPlaceholder: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .tint(.primary)
+            Text("Loading leaderboard...")
+                .font(AppType.body(13))
+                .foregroundStyle(.primary.opacity(0.72))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
+        .padding(.horizontal, 18)
+        .staticCard(cornerRadius: 22)
     }
 }
 

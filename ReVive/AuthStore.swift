@@ -41,6 +41,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     @Published private(set) var proMonthlyPriceCents: Int = 500
     @Published private(set) var proBillingURL: String?
     @Published private(set) var proPortalURL: String?
+    @Published private(set) var shouldOfferTutorialAfterSignup: Bool = false
 
     var displayErrorMessage: String? {
         guard let message = errorMessage, !message.isEmpty else { return nil }
@@ -109,6 +110,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     private let preferencesKey = "recai.user.preferences"
     private let guestQuotaKey = "recai.guest.quota"
     private let guestQuotaFilename = "guest-quota.json"
+    private let tutorialOfferKey = "recai.tutorial.offer_after_signup"
     private var notificationObservers: [NSObjectProtocol] = []
     private var currentNonce: String?
     private var needsProfileRefresh = false
@@ -141,6 +143,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         bindRuntimeNotifications()
         loadPreferences()
         loadGuestQuota()
+        shouldOfferTutorialAfterSignup = UserDefaults.standard.bool(forKey: tutorialOfferKey)
 
         if SupabaseConfig.load() == nil {
             let diag = SupabaseConfig.diagnostics()
@@ -175,8 +178,10 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         return GuestQuota(used: cappedUsed, remaining: remaining, limit: limit)
     }
 
-    private func applyCloudSubscriptionState(from profile: SupabaseUser) {
-        if let cloudIsPro = profile.isProSubscriber {
+    private func applyCloudSubscriptionState(from profile: SupabaseUser, authoritativeIsPro: Bool?) {
+        if let authoritativeIsPro {
+            hasActiveSubscription = authoritativeIsPro
+        } else if let cloudIsPro = profile.isProSubscriber {
             hasActiveSubscription = cloudIsPro
         }
         if hasActiveSubscription {
@@ -193,13 +198,9 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             return
         }
 
-        // Do not force "free" from unknown cloud state; preserve existing quota/subscription
-        // until a definitive update arrives.
-        if profile.isProSubscriber == nil {
-            return
-        }
-
-        signedInQuotaRemaining = max(0, signedInFreeQuotaLimit)
+        // Do not default to full quota when cloud state is unknown.
+        // Keep existing value until server usage sync arrives.
+        return
     }
 
     private func clearSignedInQuotaState() {
@@ -241,6 +242,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             signedInQuotaRemaining = 0
             return false
         }
+        if signedInQuotaRemaining != nil {
+            signedInQuotaRemaining = max(0, current - 1)
+        } else {
+            signedInQuotaRemaining = max(0, signedInFreeQuotaLimit - 1)
+        }
         return true
     }
 
@@ -249,7 +255,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             signedInFreeQuotaLimit = update.limit
         }
         if let isPro = update.isPro {
-            hasActiveSubscription = isPro
+            if isPro {
+                hasActiveSubscription = true
+            } else if !hasActiveSubscription {
+                hasActiveSubscription = false
+            }
         }
         if hasActiveSubscription {
             signedInQuotaRemaining = nil
@@ -589,8 +599,12 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                     self.session = newSession
                     self.saveSession(newSession)
                     self.guestQuota = nil
+                    self.shouldOfferTutorialAfterSignup = true
+                    UserDefaults.standard.set(true, forKey: self.tutorialOfferKey)
                     await self.loadUserAndProfile()
                 } else {
+                    self.shouldOfferTutorialAfterSignup = true
+                    UserDefaults.standard.set(true, forKey: self.tutorialOfferKey)
                     self.errorMessage = "Check your email to confirm your account."
                 }
             } catch {
@@ -621,10 +635,15 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
     }
 
-    func deleteAccount() {
+    func deleteAccount(confirmPassword: String? = nil) {
         guard !isLoading else { return }
         guard let supabase, let accessToken = session?.accessToken else {
             errorMessage = "Sign in required to delete your account."
+            return
+        }
+        let trimmedPassword = confirmPassword?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedPassword.isEmpty else {
+            errorMessage = "Enter your password to continue."
             return
         }
 
@@ -634,7 +653,22 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             guard let self else { return }
             defer { self.isLoading = false }
             do {
-                try await supabase.deleteAccount(accessToken: accessToken)
+                var tokenForDelete = accessToken
+                if self.canEditEmailPassword {
+                    guard let email = self.user?.email, !email.isEmpty else {
+                        self.errorMessage = "Unable to verify account email."
+                        return
+                    }
+                    let reauthSession = try await supabase.signInWithEmail(
+                        email: email,
+                        password: trimmedPassword
+                    )
+                    self.session = reauthSession
+                    self.saveSession(reauthSession)
+                    tokenForDelete = reauthSession.accessToken
+                }
+
+                try await supabase.deleteAccount(accessToken: tokenForDelete)
                 GIDSignIn.sharedInstance.signOut()
                 self.clearSession()
                 self.refreshGuestQuota()
@@ -642,6 +676,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 self.errorMessage = readableAuthError(error, provider: "delete")
             }
         }
+    }
+
+    func consumeTutorialOffer() {
+        shouldOfferTutorialAfterSignup = false
+        UserDefaults.standard.set(false, forKey: tutorialOfferKey)
     }
 
     func refreshGuestQuota() {
@@ -1105,17 +1144,57 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             await MainActor.run { self.isAdmin = false }
         }
 
+        var didResolve = false
         await MainActor.run {
-            self.applyCloudSubscriptionState(from: profile)
+            self.applyCloudSubscriptionState(from: profile, authoritativeIsPro: nil)
             let hasDefinitiveSubscriptionState =
                 profile.isProSubscriber != nil ||
                 profile.analysisQuotaRemaining != nil ||
-                profile.signedInMonthlyQuotaLimit != nil ||
-                self.hasActiveSubscription
+                profile.signedInMonthlyQuotaLimit != nil
             self.didResolveSubscriptionState = hasDefinitiveSubscriptionState
+            didResolve = hasDefinitiveSubscriptionState
+        }
+
+        if let authoritativeIsPro = try? await supabase.fetchSubscriptionState(userId: profile.id, accessToken: accessToken) {
+            await MainActor.run {
+                self.applyCloudSubscriptionState(from: profile, authoritativeIsPro: authoritativeIsPro)
+                self.didResolveSubscriptionState = true
+                didResolve = true
+            }
+        }
+
+        if !hasActiveSubscription {
+            let monthKey = currentUTCMonthKey()
+            if let used = try? await supabase.fetchSignedInMonthlyUsageCount(
+                userId: profile.id,
+                monthKey: monthKey,
+                accessToken: accessToken
+            ) {
+                await MainActor.run {
+                    let limit = max(1, self.signedInFreeQuotaLimit)
+                    self.signedInQuotaRemaining = max(0, limit - used)
+                    self.didResolveSubscriptionState = true
+                    didResolve = true
+                }
+            }
+        }
+
+        if !didResolve {
+            await MainActor.run {
+                self.didResolveSubscriptionState = true
+            }
         }
 
         refreshAppSettings()
+    }
+
+    private func currentUTCMonthKey(_ date: Date = Date()) -> String {
+        let calendar = Calendar(identifier: .gregorian)
+        let utc = TimeZone(secondsFromGMT: 0) ?? .current
+        let components = calendar.dateComponents(in: utc, from: date)
+        let year = components.year ?? 1970
+        let month = components.month ?? 1
+        return String(format: "%04d-%02d", year, month)
     }
 
     private func logout(accessToken: String, supabase: SupabaseService) async throws {

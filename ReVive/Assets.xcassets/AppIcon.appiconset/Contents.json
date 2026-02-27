@@ -1,7 +1,7 @@
 {
   "images" : [
     {
-      "filename" : "revivesquarelogo.png",
+      "filename" : "revivesquarelogo 1.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -13,7 +13,7 @@
           "value" : "dark"
         }
       ],
-      "filename" : "revivesquarelogo 1.png",
+      "filename" : "revivesquarelogo 2.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -25,7 +25,7 @@
           "value" : "tinted"
         }
       ],
-      "filename" : "revivesquarelogo 2.png",
+      "filename" : "revivesquarelogo.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"

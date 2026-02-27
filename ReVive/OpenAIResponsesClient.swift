@@ -59,7 +59,6 @@ final class OpenAIResponsesClient {
 
     func analyzeImage(
         image: UIImage,
-        contextImage: UIImage? = nil,
         itemText: String? = nil,
         location: LocationContext?,
         accessToken: String?
@@ -68,16 +67,13 @@ final class OpenAIResponsesClient {
         guard let url = edgeOpenAIURL else { throw OpenAIError.invalidURL }
         let anonKey = SupabaseConfig.load()?.anonKey
 
-        // Compress before upload to reduce payload size and latency.
-        guard let dataURL = image.compressedJPEGDataURL(maxDimension: 1400, quality: 0.7) else {
-            throw OpenAIError.invalidImage
-        }
-        let contextDataURL = contextImage?.compressedJPEGDataURL(maxDimension: 1100, quality: 0.65)
+        // Compress on a background queue to keep UI animations smooth during analyze.
+        let dataURL = try await makeCompressedDataURL(image: image)
 
         let body = ProxyRequest(
             mode: "image",
             image: dataURL,
-            contextImage: contextDataURL,
+            contextImage: nil,
             itemText: itemText,
             latitude: location?.latitude,
             longitude: location?.longitude,
@@ -118,6 +114,21 @@ final class OpenAIResponsesClient {
         }
 
         throw OpenAIError.noTextReturned
+    }
+
+    private func makeCompressedDataURL(image: UIImage) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let dataURL: String? = autoreleasepool {
+                    image.compressedJPEGDataURL(maxDimension: 1200, quality: 0.62)
+                }
+                if let dataURL {
+                    continuation.resume(returning: dataURL)
+                } else {
+                    continuation.resume(throwing: OpenAIError.invalidImage)
+                }
+            }
+        }
     }
 
     func analyzeText(
@@ -239,7 +250,11 @@ extension Notification.Name {
     static let reviveSignedQuotaUpdated = Notification.Name("revive.signedQuotaUpdated")
     static let reviveRequestSignIn = Notification.Name("revive.requestSignIn")
     static let reviveRequestUpgrade = Notification.Name("revive.requestUpgrade")
+    static let reviveOpenHome = Notification.Name("revive.openHome")
+    static let reviveOpenCapture = Notification.Name("revive.openCapture")
     static let reviveOpenSubscription = Notification.Name("revive.openSubscription")
+    static let reviveOpenTutorial = Notification.Name("revive.openTutorial")
+    static let reviveMainTutorialVisibilityChanged = Notification.Name("revive.mainTutorialVisibilityChanged")
     static let reviveBillingSuccess = Notification.Name("revive.billingSuccess")
     static let reviveBillingError = Notification.Name("revive.billingError")
 }
