@@ -595,35 +595,54 @@ private struct AuthSocialButtons: View {
 }
 
 private struct GoogleBrandedSignInButton: View {
+    @Environment(\.colorScheme) private var colorScheme
     let isLoading: Bool
     let action: () -> Void
 
-    private let fillColor = Color(red: 19 / 255, green: 19 / 255, blue: 20 / 255) // #131314
-    private let strokeColor = Color(red: 142 / 255, green: 145 / 255, blue: 143 / 255) // #8E918F
-    private let textColor = Color(red: 227 / 255, green: 227 / 255, blue: 227 / 255) // #E3E3E3
+    private var fillColor: Color {
+        if colorScheme == .light {
+            return Color.white
+        }
+        return Color(red: 19 / 255, green: 19 / 255, blue: 20 / 255) // #131314
+    }
+
+    private var strokeColor: Color {
+        if colorScheme == .light {
+            return Color.white.opacity(0.95)
+        }
+        return Color(red: 142 / 255, green: 145 / 255, blue: 143 / 255) // #8E918F
+    }
+
+    private var textColor: Color {
+        if colorScheme == .light {
+            return Color(red: 31 / 255, green: 31 / 255, blue: 31 / 255) // #1F1F1F
+        }
+        return Color(red: 227 / 255, green: 227 / 255, blue: 227 / 255) // #E3E3E3
+    }
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                GoogleLogoBadge()
-                Text("Sign in with Google")
-                    .font(googleButtonFont)
-                    .foregroundStyle(textColor)
+            ZStack {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(fillColor)
+
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(strokeColor, lineWidth: 1)
+
+                HStack(spacing: 12) {
+                    GoogleLogoBadge()
+                    Text("Sign in with Google")
+                        .font(googleButtonFont)
+                        .foregroundStyle(textColor)
+                }
+                .padding(.leading, 16)
+                .padding(.trailing, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.leading, 16)
-            .padding(.trailing, 16)
-            .frame(height: 48)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 48, maxHeight: 48)
+            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(fillColor)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(strokeColor, lineWidth: 1)
-        )
         .opacity(isLoading ? 0.6 : 1)
         .allowsHitTesting(!isLoading)
     }
@@ -696,14 +715,25 @@ private enum GoogleBrandAssets {
 }
 
 private struct AuthMessageView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let errorMessage: String?
     let notice: String?
+
+    private var errorTextColor: Color {
+        guard let message = errorMessage?.lowercased() else {
+            return colorScheme == .light ? Color.red.opacity(0.9) : Color.red.opacity(0.95)
+        }
+        if message.contains("check your email") || message.contains("confirm your account") {
+            return .primary
+        }
+        return colorScheme == .light ? Color.red.opacity(0.9) : Color.red.opacity(0.95)
+    }
 
     var body: some View {
         if let message = errorMessage, !message.isEmpty {
             Text(message)
                 .font(AppType.body(12))
-                .foregroundStyle(Color.white.opacity(0.9))
+                .foregroundStyle(errorTextColor)
         } else if let notice {
             Text(notice)
                 .font(AppType.body(12))

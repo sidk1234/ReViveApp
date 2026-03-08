@@ -46,7 +46,6 @@ final class ButtonHostController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        overrideUserInterfaceStyle = .dark
 
         applyGoogleStyle()
         button.addTarget(self, action: #selector(handleTap), for: .touchUpInside)
@@ -72,8 +71,8 @@ final class ButtonHostController: UIViewController {
 
     private func applyGoogleStyle() {
         button.style = .wide
-        button.colorScheme = .dark
-        button.overrideUserInterfaceStyle = .dark
+        button.colorScheme = traitCollection.userInterfaceStyle == .dark ? .dark : .light
+        button.overrideUserInterfaceStyle = .unspecified
     }
 
     @objc private func handleTap() {

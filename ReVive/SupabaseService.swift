@@ -271,12 +271,16 @@ final class SupabaseService {
     }
 
     private struct SignUpUser: Decodable {
+        let id: String?
         let identities: [SignUpIdentity]?
         let emailConfirmedAt: String?
+        let confirmationSentAt: String?
 
         private enum CodingKeys: String, CodingKey {
+            case id
             case identities
             case emailConfirmedAt = "email_confirmed_at"
+            case confirmationSentAt = "confirmation_sent_at"
         }
     }
 
@@ -371,6 +375,7 @@ final class SupabaseService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(config.anonKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -380,29 +385,88 @@ final class SupabaseService {
             throw ServiceError.httpError(http.statusCode, msg)
         }
 
+        let rawJSON = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let decoded = try jsonDecoder.decode(SignUpResponse.self, from: data)
         if let session = decoded.session {
             return makeSession(from: session)
         }
-        if let identities = decoded.user?.identities {
-            if identities.isEmpty {
-                // Supabase returns an empty identities array when the email is already registered.
-                throw ServiceError.emailAlreadyRegistered
+        if shouldTreatSignUpAsExistingAccount(decoded: decoded, rawJSON: rawJSON) {
+            throw ServiceError.emailAlreadyRegistered
+        }
+        return nil
+    }
+
+    func resendSignupConfirmation(email: String) async throws {
+        let url = config.url.appendingPathComponent("auth/v1/resend")
+        let payload: [String: Any] = [
+            "type": "signup",
+            "email": email
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(config.anonKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw ServiceError.httpError(http.statusCode, msg)
+        }
+    }
+
+    private func shouldTreatSignUpAsExistingAccount(
+        decoded: SignUpResponse,
+        rawJSON: [String: Any]?
+    ) -> Bool {
+        guard decoded.session == nil else { return false }
+
+        if let user = decoded.user {
+            if let id = user.id, id == "00000000-0000-0000-0000-000000000000" {
+                return true
             }
-            if decoded.session == nil {
+            if let identities = user.identities {
+                if identities.isEmpty {
+                    // Supabase commonly returns empty identities when the email already exists.
+                    return true
+                }
                 let hasNonEmailProvider = identities.contains { identity in
                     guard let provider = identity.provider?.lowercased() else { return false }
                     return provider != "email"
                 }
                 if hasNonEmailProvider {
-                    throw ServiceError.emailAlreadyRegistered
+                    return true
+                }
+            }
+            if user.emailConfirmedAt != nil {
+                return true
+            }
+            if user.confirmationSentAt == nil {
+                if user.identities?.isEmpty == true {
+                    return true
                 }
             }
         }
-        if decoded.session == nil, decoded.user?.emailConfirmedAt != nil {
-            throw ServiceError.emailAlreadyRegistered
+
+        if let userRaw = rawJSON?["user"] as? [String: Any] {
+            if let id = userRaw["id"] as? String,
+               id == "00000000-0000-0000-0000-000000000000" {
+                return true
+            }
+            if let emailConfirmedAt = userRaw["email_confirmed_at"] as? String,
+               !emailConfirmedAt.isEmpty {
+                return true
+            }
+            if let identities = userRaw["identities"] as? [Any],
+               identities.isEmpty {
+                return true
+            }
         }
-        return nil
+
+        return false
     }
 
     func sendPasswordReset(email: String) async throws {

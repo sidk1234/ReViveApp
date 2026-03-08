@@ -7,12 +7,14 @@
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject private var auth: AuthStore
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
         Group {
             if hasSeenOnboarding {
                 MainTabView()
+                    .preferredColorScheme(auth.preferredColorScheme)
             } else {
                 OnboardingView {
                     hasSeenOnboarding = true
@@ -24,4 +26,8 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
+        .environmentObject(AuthStore())
+        .environmentObject(HistoryStore())
+        .environmentObject(AppConfigStore())
+        .environmentObject(LeaderboardStore())
 }

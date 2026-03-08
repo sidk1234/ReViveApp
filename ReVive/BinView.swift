@@ -1,7 +1,19 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 struct BinView: View {
+    private struct PendingSwipeAction: Identifiable {
+        enum Kind {
+            case mark
+            case delete
+        }
+
+        let id = UUID()
+        let entryID: UUID
+        let kind: Kind
+    }
+
     @EnvironmentObject private var history: HistoryStore
     @EnvironmentObject private var auth: AuthStore
     @Environment(\.colorScheme) private var colorScheme
@@ -10,12 +22,14 @@ struct BinView: View {
     @State private var isSelectionMode: Bool = false
     @State private var selectedEntryIDs: Set<UUID> = []
     @State private var showBulkRecycleConfirm: Bool = false
+    @State private var showBulkDeleteConfirm: Bool = false
+    @State private var pendingSwipeAction: PendingSwipeAction?
     @State private var showConfetti: Bool = false
     @State private var showCarbonSavedOverlay: Bool = false
     @State private var carbonSavedOverlayText: String = ""
     @State private var searchText: String = ""
     @State private var showMarkAsRecycledTutorial: Bool = false
-    @State private var isMainTutorialOverlayActive: Bool = false
+    @AppStorage("revive.tutorial.mainTabs.overlayVisible") private var isMainTutorialOverlayActive = false
 
     private let markAsRecycledTutorialKey = "revive.tutorial.bin.markAsRecycled"
 
@@ -61,6 +75,15 @@ struct BinView: View {
         filteredEntries.filter { $0.recyclable && $0.recycleStatus != .recycled }.count
     }
 
+    private var selectedEntries: [HistoryEntry] {
+        history.entries.filter { selectedEntryIDs.contains($0.id) }
+    }
+
+    private var canMarkSelectedEntries: Bool {
+        !selectedEntries.isEmpty &&
+        selectedEntries.allSatisfy { $0.recyclable && $0.recycleStatus != .recycled }
+    }
+
     private var firstMarkableEntryID: UUID? {
         filteredEntries.first(where: { $0.recyclable && $0.recycleStatus != .recycled })?.id
     }
@@ -74,126 +97,186 @@ struct BinView: View {
             AppTheme.backgroundGradient(colorScheme)
                 .ignoresSafeArea()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Text("Bin")
-                            .font(AppType.display(30))
-                            .foregroundStyle(.primary)
+            GeometryReader { pageGeo in
+                let horizontalPadding = AppLayout.pageHorizontalPadding(for: pageGeo.size.width)
+                let topPadding = AppLayout.pageTopPadding(for: pageGeo.size.width)
+                let bottomPadding = AppLayout.pageBottomPadding(for: pageGeo.size.width)
 
-                        Spacer()
+                List {
+                        Section {
+                            VStack(alignment: .leading, spacing: 16) {
+                                HStack {
+                                    Text("Bin")
+                                        .font(AppType.display(30))
+                                        .foregroundStyle(.primary)
 
-                        if !history.entries.isEmpty {
-                            Button(isSelectionMode ? "Done" : "Select") {
-                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                    isSelectionMode.toggle()
-                                    if !isSelectionMode {
-                                        selectedEntryIDs.removeAll()
+                                    Spacer()
+
+                                    if !history.entries.isEmpty {
+                                        Button(isSelectionMode ? "Done" : "Select") {
+                                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                                isSelectionMode.toggle()
+                                                if !isSelectionMode {
+                                                    selectedEntryIDs.removeAll()
+                                                }
+                                            }
+                                        }
+                                        .font(AppType.title(14))
+                                        .foregroundStyle(.primary)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 9)
+                                        .background(
+                                            Capsule().fill(.ultraThinMaterial)
+                                        )
+                                        .overlay(
+                                            Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1)
+                                        )
+                                        .buttonStyle(.plain)
                                     }
                                 }
-                            }
-                            .font(AppType.title(14))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(
-                                Capsule().fill(.ultraThinMaterial)
-                            )
-                            .overlay(
-                                Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1)
-                            )
-                            .buttonStyle(.plain)
-                        }
-                    }
 
-                    BinStatsRow(
-                        totalCount: totalCount,
-                        markedCount: markedCount,
-                        recycledCount: recycledCount,
-                        totalCarbonSavedKg: totalCarbonSavedKg
-                    )
-                    BinSearchBar(text: $searchText)
+                                BinStatsRow(
+                                    totalCount: totalCount,
+                                    markedCount: markedCount,
+                                    recycledCount: recycledCount,
+                                    totalCarbonSavedKg: totalCarbonSavedKg
+                                )
+                                BinSearchBar(text: $searchText)
 
-                    if isSelectionMode {
-                        BinSelectionBar(
-                            selectedCount: selectedEntryIDs.count,
-                            markableCount: filteredMarkableCount,
-                            onMarkSelected: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showBulkRecycleConfirm = true
+                                if isSelectionMode {
+                                    BinSelectionBar(
+                                        selectedCount: selectedEntryIDs.count,
+                                        markableCount: filteredMarkableCount,
+                                        canMarkSelected: canMarkSelectedEntries,
+                                        onMarkSelected: {
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                showBulkRecycleConfirm = true
+                                            }
+                                        },
+                                        onDeleteSelected: {
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                showBulkDeleteConfirm = true
+                                            }
+                                        }
+                                    )
+                                }
+
+                                if history.entries.isEmpty {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 34, weight: .bold))
+                                            .foregroundStyle(.primary.opacity(0.7))
+
+                                        Text("Your bin is empty")
+                                            .font(AppType.title(18))
+                                            .foregroundStyle(.primary)
+
+                                        Text("Analyze an item, then tap Mark for Recycle to add it here.")
+                                            .font(AppType.body(14))
+                                            .foregroundStyle(.primary.opacity(0.7))
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(24)
+                                    .staticCard(cornerRadius: 22)
+                                } else if filteredEntries.isEmpty {
+                                    VStack(spacing: 10) {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 26, weight: .semibold))
+                                            .foregroundStyle(.primary.opacity(0.75))
+                                        Text("No matching items")
+                                            .font(AppType.title(16))
+                                            .foregroundStyle(.primary)
+                                        Text("Try a different search term.")
+                                            .font(AppType.body(13))
+                                            .foregroundStyle(.primary.opacity(0.7))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(22)
+                                    .staticCard(cornerRadius: 22)
                                 }
                             }
-                        )
-                    }
-
-                    if history.entries.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 34, weight: .bold))
-                                .foregroundStyle(.primary.opacity(0.7))
-
-                            Text("Your bin is empty")
-                                .font(AppType.title(18))
-                                .foregroundStyle(.primary)
-
-                            Text("Analyze an item, then tap Mark for Recycle to add it here.")
-                                .font(AppType.body(14))
-                                .foregroundStyle(.primary.opacity(0.7))
-                                .multilineTextAlignment(.center)
+                            .padding(.top, topPadding)
+                            .padding(.bottom, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .adaptivePageFrame(width: pageGeo.size.width)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(24)
-                        .staticCard(cornerRadius: 22)
-                    } else if filteredEntries.isEmpty {
-                        VStack(spacing: 10) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 26, weight: .semibold))
-                                .foregroundStyle(.primary.opacity(0.75))
-                            Text("No matching items")
-                                .font(AppType.title(16))
-                                .foregroundStyle(.primary)
-                            Text("Try a different search term.")
-                                .font(AppType.body(13))
-                                .foregroundStyle(.primary.opacity(0.7))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(22)
-                        .staticCard(cornerRadius: 22)
-                    } else {
-                        LazyVStack(spacing: 14) {
+                        .listRowInsets(EdgeInsets(top: 0, leading: horizontalPadding, bottom: 0, trailing: horizontalPadding))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+
+                        if !history.entries.isEmpty && !filteredEntries.isEmpty {
                             ForEach(filteredEntries) { entry in
                                 let isSelectable = entry.recyclable && entry.recycleStatus != .recycled
                                 BinEntryCard(
                                     entry: entry,
                                     isSelectionMode: isSelectionMode,
                                     isSelected: selectedEntryIDs.contains(entry.id),
-                                    isSelectable: isSelectable,
                                     onTap: {
                                         if isSelectionMode {
-                                            guard isSelectable else { return }
                                             toggleEntrySelection(entry.id)
                                         } else {
                                             selectedEntry = entry
                                         }
                                     }
                                 )
+                                .equatable()
                                 .anchorPreference(key: BinMarkAsRecycledAnchorKey.self, value: .bounds) { anchor in
+                                    guard showMarkAsRecycledTutorial else { return nil }
                                     guard entry.id == firstMarkableEntryID else { return nil }
                                     return anchor
                                 }
+                                .padding(.vertical, 7)
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    if !isSelectionMode, isSelectable {
+                                        Button {
+                                            requestSwipeActionConfirm(for: entry, kind: .mark)
+                                        } label: {
+                                            Label("Mark", systemImage: "checkmark.circle.fill")
+                                        }
+                                        .tint(AppTheme.mint)
+                                    }
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    if !isSelectionMode {
+                                        Button {
+                                            requestSwipeActionConfirm(for: entry, kind: .delete)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash.fill")
+                                        }
+                                        .tint(Color(red: 0.92, green: 0.27, blue: 0.32))
+                                    }
+                                }
+                                .listRowInsets(EdgeInsets(top: 0, leading: horizontalPadding, bottom: 0, trailing: horizontalPadding))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
                             }
+
+                            Color.clear
+                                .frame(height: bottomPadding + 10)
+                                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
                         }
                     }
-                }
-                .padding(.horizontal, 28)
-                .padding(.top, 28)
-                .padding(.bottom, 120)
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .onAppear {
+                        prewarmBinThumbnailCache(for: filteredEntries)
+                    }
             }
         }
         .sheet(item: $selectedEntry) { entry in
-            BinDetailView(entry: entry) {
-                completeMarkAsRecycled(entry)
-            }
+            BinDetailView(
+                entry: entry,
+                onMarkAsRecycled: {
+                    completeMarkAsRecycled(entry)
+                },
+                onDeleteImpact: {
+                    deleteEntry(entry)
+                }
+            )
         }
         .overlay {
             ZStack {
@@ -256,6 +339,127 @@ struct BinView: View {
                     .transition(.opacity)
                 }
 
+                if showBulkDeleteConfirm {
+                    ZStack {
+                        Color.black.opacity(0.45)
+                            .ignoresSafeArea()
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Delete Selected Impacts")
+                                .font(AppType.title(18))
+                                .foregroundStyle(.primary)
+
+                            Text("This will permanently remove the selected impacts from Bin.")
+                                .font(AppType.body(14))
+                                .foregroundStyle(.primary.opacity(0.8))
+
+                            HStack(spacing: 10) {
+                                Button("Cancel") {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showBulkDeleteConfirm = false
+                                    }
+                                }
+                                .font(AppType.title(14))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(.ultraThinMaterial)
+                                )
+
+                                Button("Delete") {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showBulkDeleteConfirm = false
+                                    }
+                                    deleteSelectedEntries()
+                                }
+                                .font(AppType.title(14))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .liquidGlassButton(
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous),
+                                    tint: Color(red: 0.92, green: 0.27, blue: 0.32)
+                                )
+                            }
+                        }
+                        .padding(20)
+                        .frame(maxWidth: 360)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+                        )
+                    }
+                    .transition(.opacity)
+                }
+
+                if let pendingSwipeAction {
+                    ZStack {
+                        Color.black.opacity(0.45)
+                            .ignoresSafeArea()
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text(pendingSwipeAction.kind == .mark ? "Confirm Mark as Recycled" : "Confirm Delete")
+                                .font(AppType.title(18))
+                                .foregroundStyle(.primary)
+
+                            Text(
+                                pendingSwipeAction.kind == .mark
+                                    ? "Mark this impact as recycled?"
+                                    : "Delete this impact from Bin?"
+                            )
+                            .font(AppType.body(14))
+                            .foregroundStyle(.primary.opacity(0.8))
+
+                            HStack(spacing: 10) {
+                                Button("Cancel") {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        self.pendingSwipeAction = nil
+                                    }
+                                }
+                                .font(AppType.title(14))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(.ultraThinMaterial)
+                                )
+
+                                Button(pendingSwipeAction.kind == .mark ? "Mark" : "Delete") {
+                                    confirmPendingSwipeAction()
+                                }
+                                .font(AppType.title(14))
+                                .foregroundStyle(pendingSwipeAction.kind == .mark ? .black : .white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .liquidGlassButton(
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous),
+                                    tint: pendingSwipeAction.kind == .mark
+                                        ? AppTheme.mint
+                                        : Color(red: 0.92, green: 0.27, blue: 0.32)
+                                )
+                            }
+                        }
+                        .padding(20)
+                        .frame(maxWidth: 360)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+                        )
+                    }
+                    .transition(.opacity)
+                }
+
                 if showConfetti {
                     RecycleConfettiView()
                         .ignoresSafeArea()
@@ -299,7 +503,7 @@ struct BinView: View {
                         message: "Tap this highlighted item, then confirm that you've recycled it to move it out of pending Bin status.",
                         buttonTitle: nil,
                         onDone: nil,
-                        highlightStyle: .roundedRect(cornerRadius: 20, padding: 8),
+                        highlightStyle: .roundedRect(cornerRadius: 20, padding: 0),
                         showDirectionalArrow: false,
                         showPressIndicator: true,
                         onTargetTap: {
@@ -315,8 +519,9 @@ struct BinView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showBulkRecycleConfirm)
+        .animation(.easeInOut(duration: 0.2), value: showBulkDeleteConfirm)
+        .animation(.easeInOut(duration: 0.2), value: pendingSwipeAction?.id)
         .animation(.easeInOut(duration: 0.2), value: showCarbonSavedOverlay)
-        .animation(.easeInOut(duration: 0.2), value: showMarkAsRecycledTutorial)
         .onAppear {
             updateMarkAsRecycledTutorialVisibility()
         }
@@ -326,9 +531,11 @@ struct BinView: View {
             if selectedEntryIDs.isEmpty, isSelectionMode, filteredMarkableCount == 0 {
                 isSelectionMode = false
             }
+            prewarmBinThumbnailCache(for: filteredEntries)
             updateMarkAsRecycledTutorialVisibility()
         }
         .onChange(of: searchText) { _, _ in
+            prewarmBinThumbnailCache(for: filteredEntries)
             updateMarkAsRecycledTutorialVisibility()
         }
         .onChange(of: isSelectionMode) { _, _ in
@@ -337,9 +544,7 @@ struct BinView: View {
         .onChange(of: selectedEntry?.id) { _, _ in
             updateMarkAsRecycledTutorialVisibility()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .reviveMainTutorialVisibilityChanged)) { note in
-            guard let isVisible = note.object as? Bool else { return }
-            isMainTutorialOverlayActive = isVisible
+        .onChange(of: isMainTutorialOverlayActive) { _, _ in
             updateMarkAsRecycledTutorialVisibility()
         }
     }
@@ -365,7 +570,7 @@ struct BinView: View {
     }
 
     private func completeMarkSelectedAsRecycled() {
-        guard !selectedEntryIDs.isEmpty else { return }
+        guard canMarkSelectedEntries else { return }
 
         var didMarkAny = false
         var totalSavedKg = 0.0
@@ -386,6 +591,85 @@ struct BinView: View {
             triggerRecycledConfetti()
             completeMarkAsRecycledTutorialIfNeeded()
         }
+    }
+
+    private func presentSwipeActionConfirm(for entry: HistoryEntry, kind: PendingSwipeAction.Kind) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pendingSwipeAction = PendingSwipeAction(entryID: entry.id, kind: kind)
+        }
+    }
+
+    private func requestSwipeActionConfirm(for entry: HistoryEntry, kind: PendingSwipeAction.Kind) {
+        // Defer modal presentation one runloop so List can settle swipe-action visuals first.
+        DispatchQueue.main.async {
+            presentSwipeActionConfirm(for: entry, kind: kind)
+        }
+    }
+
+    private func confirmPendingSwipeAction() {
+        guard let action = pendingSwipeAction else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pendingSwipeAction = nil
+        }
+
+        guard let entry = history.entries.first(where: { $0.id == action.entryID }) else { return }
+
+        switch action.kind {
+        case .mark:
+            guard entry.recyclable && entry.recycleStatus != .recycled else { return }
+            completeMarkAsRecycled(entry)
+        case .delete:
+            deleteEntry(entry)
+        }
+    }
+
+    private func prewarmBinThumbnailCache(for entries: [HistoryEntry]) {
+        let paths = entries.compactMap(\.localImagePath).filter { !$0.isEmpty }
+        guard !paths.isEmpty else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            for path in paths {
+                if historyBinImageCache.object(forKey: path as NSString) != nil {
+                    continue
+                }
+                if let image = loadDownsampledBinImage(atPath: path) ?? UIImage(contentsOfFile: path) {
+                    let prepared = image.preparingForDisplay() ?? image
+                    cacheHistoryBinImage(prepared, for: [path])
+                }
+            }
+        }
+    }
+
+    private func deleteEntry(_ entry: HistoryEntry) {
+        guard history.deleteEntry(entryID: entry.id) != nil else { return }
+        selectedEntryIDs.remove(entry.id)
+        if auth.autoSyncImpactEnabled {
+            auth.deleteImpact(entry: entry)
+        }
+        if selectedEntry?.id == entry.id {
+            selectedEntry = nil
+        }
+        if isSelectionMode && selectedEntryIDs.isEmpty {
+            isSelectionMode = false
+        }
+    }
+
+    private func deleteSelectedEntries() {
+        guard !selectedEntryIDs.isEmpty else { return }
+
+        let removed = history.deleteEntries(entryIDs: selectedEntryIDs)
+        guard !removed.isEmpty else { return }
+
+        if auth.autoSyncImpactEnabled {
+            auth.deleteImpactEntries(removed)
+        }
+
+        if let selectedID = selectedEntry?.id, removed.contains(where: { $0.id == selectedID }) {
+            selectedEntry = nil
+        }
+
+        selectedEntryIDs.removeAll()
+        isSelectionMode = false
     }
 
     private func updateMarkAsRecycledTutorialVisibility() {
@@ -485,24 +769,18 @@ private struct BinSearchBar: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-        )
-        .liquidGlassBackground(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .staticCard(cornerRadius: 16)
     }
 }
 
 private struct BinSelectionBar: View {
     let selectedCount: Int
     let markableCount: Int
+    let canMarkSelected: Bool
     let onMarkSelected: () -> Void
+    let onDeleteSelected: () -> Void
 
-    private var canMarkSelected: Bool {
+    private var canDeleteSelected: Bool {
         selectedCount > 0
     }
 
@@ -514,27 +792,51 @@ private struct BinSelectionBar: View {
                 .font(AppType.body(12))
                 .foregroundStyle(.primary.opacity(0.75))
 
-            Button {
-                onMarkSelected()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 15, weight: .bold))
-                    Text("Mark Selected as Recycled (\(selectedCount))")
-                        .font(AppType.title(14))
+            HStack(spacing: 10) {
+                Button {
+                    onMarkSelected()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 15, weight: .bold))
+                        Text("Mark (\(selectedCount))")
+                            .font(AppType.title(14))
+                    }
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .liquidGlassButton(
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                        tint: AppTheme.mint
+                    )
                 }
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 11)
-                .liquidGlassButton(
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous),
-                    tint: AppTheme.mint
-                )
+                .buttonStyle(.plain)
+                .disabled(!canMarkSelected)
+                .opacity(canMarkSelected ? 1.0 : 0.45)
+
+                Button {
+                    onDeleteSelected()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "trash.fill")
+                            .font(.system(size: 15, weight: .bold))
+                        Text("Delete (\(selectedCount))")
+                            .font(AppType.title(14))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .liquidGlassButton(
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                        tint: Color(red: 0.92, green: 0.27, blue: 0.32)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canDeleteSelected)
+                .opacity(canDeleteSelected ? 1.0 : 0.45)
             }
-            .buttonStyle(.plain)
-            .disabled(!canMarkSelected)
-            .opacity(canMarkSelected ? 1.0 : 0.45)
         }
         .padding(14)
         .background(
@@ -545,7 +847,7 @@ private struct BinSelectionBar: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.primary.opacity(0.15), lineWidth: 1)
         )
-        .liquidGlassBackground(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .stableBinGlassBackground(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
@@ -598,17 +900,23 @@ private struct BinStatCard: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.primary.opacity(0.12), lineWidth: 1)
         )
-        .liquidGlassBackground(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .stableBinGlassBackground(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
-private struct BinEntryCard: View {
+private struct BinEntryCard: View, Equatable {
+    @Environment(\.colorScheme) private var colorScheme
     let entry: HistoryEntry
     let isSelectionMode: Bool
     let isSelected: Bool
-    let isSelectable: Bool
     let onTap: () -> Void
     private static let contentRowMinHeight: CGFloat = 96
+
+    static func == (lhs: BinEntryCard, rhs: BinEntryCard) -> Bool {
+        lhs.entry == rhs.entry &&
+        lhs.isSelectionMode == rhs.isSelectionMode &&
+        lhs.isSelected == rhs.isSelected
+    }
 
     private var statusColor: Color {
         switch entry.recycleStatus {
@@ -637,11 +945,7 @@ private struct BinEntryCard: View {
             if isSelectionMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(
-                        isSelected
-                            ? AppTheme.mint
-                            : (isSelectable ? .primary.opacity(0.55) : .primary.opacity(0.25))
-                    )
+                    .foregroundStyle(isSelected ? AppTheme.mint : .primary.opacity(0.55))
                     .frame(width: 22, alignment: .center)
                     .frame(minHeight: Self.contentRowMinHeight, alignment: .center)
             }
@@ -650,7 +954,7 @@ private struct BinEntryCard: View {
                 BinEntryThumbnail(entry: entry)
                 Text("\(max(1, entry.scanCount))")
                     .font(AppType.title(20))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(colorScheme == .light ? Color.black : Color.white)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -678,12 +982,10 @@ private struct BinEntryCard: View {
                         .foregroundStyle(.primary.opacity(0.75))
                         .lineLimit(1)
 
-                    AddressLinkText(
-                        text: entry.bin,
-                        font: AppType.body(13),
-                        color: .primary.opacity(0.75),
-                        lineLimit: 1
-                    )
+                    Text(entry.bin)
+                        .font(AppType.body(13))
+                        .foregroundStyle(.primary.opacity(0.75))
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 0)
@@ -705,12 +1007,18 @@ private struct BinEntryCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .staticCard(cornerRadius: 20)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(colorScheme == .light ? Color.white.opacity(0.74) : Color.white.opacity(0.11))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(statusColor.opacity(0.9), lineWidth: 2)
+                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
         )
-        .opacity(isSelectionMode && !isSelectable ? 0.72 : 1.0)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(statusColor.opacity(0.72), lineWidth: 1.5)
+        )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }
@@ -730,7 +1038,7 @@ private struct BinEntryThumbnail: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.primary.opacity(0.08))
                 .frame(width: 64, height: 64)
 
             if let image = loadHistoryImageForBin(path: entry.localImagePath) {
@@ -755,10 +1063,12 @@ private struct BinEntryThumbnail: View {
 private struct BinDetailView: View {
     let entry: HistoryEntry
     let onMarkAsRecycled: () -> Void
+    let onDeleteImpact: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("revive.skipRecycleConfirmation") private var skipRecycleConfirmation: Bool = false
     @State private var showConfirmCard: Bool = false
+    @State private var showDeleteConfirmCard: Bool = false
     @State private var doNotShowAgain: Bool = false
     @State private var currentScanIndex: Int = 0
 
@@ -773,6 +1083,7 @@ private struct BinDetailView: View {
                     recyclable: entry.recyclable,
                     bin: entry.bin,
                     notes: entry.notes,
+                    disposalLocation: entry.disposalLocation,
                     carbonSavedKg: entry.carbonSavedKg,
                     rawJSON: entry.rawJSON,
                     source: entry.source,
@@ -913,13 +1224,35 @@ private struct BinDetailView: View {
                         title: nil,
                         statusText: statusText,
                         statusColor: statusColor,
-                        materialBinText: "\(selectedScan.material) • \(selectedScan.bin)",
+                        materialBinText: "\(selectedScan.material) • \(displayBinValue(for: selectedScan))",
                         notesText: selectedScan.notes,
                         carbonSavedText: formatCarbon(selectedScan.carbonSavedKg),
                         carbonSavedColor: .primary.opacity(0.8),
                         metaText: "Scan \(currentScanIndex + 1) of \(orderedScans.count) • \(max(1, entry.scanCount)) total",
                         dateText: formatBinEntryDate(selectedScan.date)
                     )
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showDeleteConfirmCard = true
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "trash.fill")
+                                .font(.system(size: 15, weight: .bold))
+                            Text("Delete Impact")
+                                .font(AppType.title(16))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
+                        .liquidGlassButton(
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous),
+                            tint: Color(red: 0.92, green: 0.27, blue: 0.32)
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 28)
@@ -1004,8 +1337,71 @@ private struct BinDetailView: View {
                 }
                 .transition(.opacity)
             }
+
+            if showDeleteConfirmCard {
+                ZStack {
+                    Color.black.opacity(0.45)
+                        .ignoresSafeArea()
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Delete Impact")
+                            .font(AppType.title(18))
+                            .foregroundStyle(.primary)
+
+                        Text("Are you sure you want to remove this impact from Bin?")
+                            .font(AppType.body(14))
+                            .foregroundStyle(.primary.opacity(0.8))
+
+                        HStack(spacing: 10) {
+                            Button("Cancel") {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showDeleteConfirmCard = false
+                                }
+                            }
+                            .font(AppType.title(14))
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 11)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            )
+
+                            Button("Delete") {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showDeleteConfirmCard = false
+                                }
+                                onDeleteImpact()
+                                dismiss()
+                            }
+                            .font(AppType.title(14))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 11)
+                            .liquidGlassButton(
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous),
+                                tint: Color(red: 0.92, green: 0.27, blue: 0.32)
+                            )
+                        }
+                    }
+                    .padding(20)
+                    .frame(maxWidth: 360)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+                    )
+                }
+                .transition(.opacity)
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: showConfirmCard)
+        .animation(.easeInOut(duration: 0.2), value: showDeleteConfirmCard)
         .onAppear {
             currentScanIndex = 0
         }
@@ -1017,6 +1413,14 @@ private struct BinDetailView: View {
             return String(format: "%.2f kg CO2e", clamped)
         }
         return String(format: "%.1f kg CO2e", clamped)
+    }
+
+    private func displayBinValue(for scan: HistoryScan) -> String {
+        let rawLocation = scan.disposalLocation ?? DisposalLocationFormatter.extractedFromRawPayload(scan.rawJSON)
+        if let location = DisposalLocationFormatter.formatted(rawLocation) {
+            return location
+        }
+        return scan.bin
     }
 }
 
@@ -1091,10 +1495,51 @@ private final class RecycleConfettiEmitterView: UIView {
     }
 }
 
+private let historyBinImageCache = NSCache<NSString, UIImage>()
+private let binEntryDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .short
+    return formatter
+}()
+private let binThumbnailMaxPixelSize: CGFloat = 240
+
+private func cacheHistoryBinImage(_ image: UIImage, for paths: [String]) {
+    for path in paths where !path.isEmpty {
+        historyBinImageCache.setObject(image, forKey: path as NSString)
+    }
+}
+
+private func loadDownsampledBinImage(atPath path: String) -> UIImage? {
+    let fileURL = URL(fileURLWithPath: path)
+    let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+    guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions) else {
+        return nil
+    }
+
+    let downsampleOptions = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: binThumbnailMaxPixelSize
+    ] as CFDictionary
+
+    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, downsampleOptions) else {
+        return nil
+    }
+    return UIImage(cgImage: cgImage)
+}
+
 private func loadHistoryImageForBin(path: String?) -> UIImage? {
     guard let path, !path.isEmpty else { return nil }
-    if let image = UIImage(contentsOfFile: path) {
-        return image
+    if let cached = historyBinImageCache.object(forKey: path as NSString) {
+        return cached
+    }
+
+    if let image = loadDownsampledBinImage(atPath: path) ?? UIImage(contentsOfFile: path) {
+        let prepared = image.preparingForDisplay() ?? image
+        cacheHistoryBinImage(prepared, for: [path])
+        return prepared
     }
 
     let fileName = URL(fileURLWithPath: path).lastPathComponent
@@ -1105,8 +1550,10 @@ private func loadHistoryImageForBin(path: String?) -> UIImage? {
         let docsCandidate = docs
             .appendingPathComponent("impact-images", isDirectory: true)
             .appendingPathComponent(fileName)
-        if let image = UIImage(contentsOfFile: docsCandidate.path) {
-            return image
+        if let image = loadDownsampledBinImage(atPath: docsCandidate.path) ?? UIImage(contentsOfFile: docsCandidate.path) {
+            let prepared = image.preparingForDisplay() ?? image
+            cacheHistoryBinImage(prepared, for: [path, docsCandidate.path])
+            return prepared
         }
     }
 
@@ -1115,8 +1562,10 @@ private func loadHistoryImageForBin(path: String?) -> UIImage? {
             .appendingPathComponent("ReVive", isDirectory: true)
             .appendingPathComponent("impact-images", isDirectory: true)
             .appendingPathComponent(fileName)
-        if let image = UIImage(contentsOfFile: supportCandidate.path) {
-            return image
+        if let image = loadDownsampledBinImage(atPath: supportCandidate.path) ?? UIImage(contentsOfFile: supportCandidate.path) {
+            let prepared = image.preparingForDisplay() ?? image
+            cacheHistoryBinImage(prepared, for: [path, supportCandidate.path])
+            return prepared
         }
     }
 
@@ -1124,10 +1573,19 @@ private func loadHistoryImageForBin(path: String?) -> UIImage? {
 }
 
 private func formatBinEntryDate(_ date: Date) -> String {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .medium
-    formatter.timeStyle = .short
-    return formatter.string(from: date)
+    binEntryDateFormatter.string(from: date)
+}
+
+private extension View {
+    // Keep liquid glass in Bin while reducing light-mode flicker from repeated material recomposition.
+    func stableBinGlassBackground<S: InsettableShape>(in shape: S) -> some View {
+        self
+            .liquidGlassBackground(in: shape)
+            .transaction { transaction in
+                transaction.disablesAnimations = true
+            }
+            .compositingGroup()
+    }
 }
 
 #Preview {

@@ -9,15 +9,29 @@ import UIKit
 struct HomeFeedView: View {
     @EnvironmentObject private var history: HistoryStore
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("revive.tutorial.mainTabs.overlayVisible") private var isMainTutorialOverlayActive = false
 
     @State private var showChallengeMenu = false
     @State private var challengeXP = ChallengeProgression.currentXP()
     @State private var completedChallengeIDs: Set<String> = ChallengeProgression.completedChallengeIDs()
-    @State private var metrics = HomeFeedMetrics()
+    @State private var streakStats = RecycleStreakStats(
+        currentDays: 0,
+        longestDays: 0,
+        isRecordedToday: false,
+        lastRecycledDay: nil,
+        nextMilestoneDays: 3,
+        nextMilestoneXP: 50
+    )
     @State private var homeChallengeTutorialStep: HomeChallengeTutorialStep?
     @State private var queueLevelTutorialAfterChallengeSheet = false
     @State private var hasUserScrolledTowardChallenges = false
     @State private var shouldTrackHomeChallengeTutorial = false
+    @State private var showStreakMenu = false
+    @State private var streakRewardQueue: [StreakMilestoneReward] = []
+    @State private var activeStreakReward: StreakMilestoneReward?
+    @State private var showStreakCompletionToast = false
+    @State private var streakToastProgress: CGFloat = 0
+    @State private var streakToastShowsCheck = false
     @State private var showChallengeConfetti = false
     @State private var challengeCompletionQueue: [String] = []
     @State private var activeChallengeCompletionTitle: String?
@@ -25,9 +39,18 @@ struct HomeFeedView: View {
     @State private var challengeToastProgress: CGFloat = 0
     @State private var challengeToastShowsCheck = false
     @State private var challengeToastTask: Task<Void, Never>?
+    @State private var streakToastTask: Task<Void, Never>?
+    @State private var isPreparingHomeChallengeTutorial = false
+    @State private var isHomeScrollDragging = false
+    @State private var shouldTriggerChallengeTutorialAfterDragEnds = false
+    @State private var activeInsightCardID: String?
+    @State private var isChallengesCardMostlyVisible = false
 
     private let homeChallengeTutorialKey = "revive.tutorial.home.challengeFlow"
+    private let homeChallengeReplayPendingKey = "revive.tutorial.home.challengeFlow.replayPending"
+    private let homeChallengeReplayRequestedAtKey = "revive.tutorial.home.challengeFlow.replayRequestedAt"
     private let homeTopAnchorID = "revive.home.scroll.top"
+    private let homeChallengesCardID = "revive.home.feed.challenge.card"
 
     private let dailyTips = [
         "Rinse food residue from bottles and jars before recycling.",
@@ -171,8 +194,8 @@ struct HomeFeedView: View {
         metrics.totalCarbonSavedKg
     }
 
-    private var recentEntries: [HistoryEntry] {
-        metrics.recentEntries
+    private var metrics: HomeFeedMetrics {
+        HomeFeedMetrics(entries: history.entries)
     }
 
     private var challengeLevel: Int {
@@ -200,9 +223,16 @@ struct HomeFeedView: View {
                 tint: AppTheme.sky
             ),
             HomeFeedCardData(
-                id: "myth-fact",
-                title: "Myth vs Fact",
-                body: "\(todayMythFact.myth)\n\(todayMythFact.fact)",
+                id: "recycling-myth",
+                title: "Recycling Myth",
+                body: strippedLeadingLabel(from: todayMythFact.myth, label: "Myth:"),
+                symbol: "exclamationmark.triangle.fill",
+                tint: Color.orange
+            ),
+            HomeFeedCardData(
+                id: "recycling-fact",
+                title: "Recycling Fact",
+                body: strippedLeadingLabel(from: todayMythFact.fact, label: "Fact:"),
                 symbol: "checkmark.seal.fill",
                 tint: AppTheme.mint
             ),
@@ -226,109 +256,120 @@ struct HomeFeedView: View {
         ]
     }
 
+    private var challengeCard: HomeFeedCardData? {
+        feedCards.first(where: \.opensChallengeMenu)
+    }
+
+    private var insightCards: [HomeFeedCardData] {
+        feedCards.filter { !$0.opensChallengeMenu }
+    }
+
     var body: some View {
         ZStack {
             AppTheme.backgroundGradient(colorScheme)
                 .ignoresSafeArea()
 
-            ScrollViewReader { scrollProxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        Group {
-                            Color.clear
-                                .frame(height: 0)
-                        }
-                        .id(homeTopAnchorID)
+            GeometryReader { pageGeo in
+                ScrollViewReader { _ in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVStack(alignment: .leading, spacing: 22) {
+                            Group {
+                                Color.clear
+                                    .frame(height: 0)
+                            }
+                            .id(homeTopAnchorID)
 
-                        Text("Home")
-                            .font(AppType.display(30))
-                            .foregroundStyle(.primary)
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Home")
+                                        .font(AppType.display(30))
+                                        .foregroundStyle(.primary)
 
-                        Text("Daily tips, impact snapshots, and progress-driven challenges.")
-                            .font(AppType.body(15))
-                            .foregroundStyle(.primary.opacity(0.75))
-
-                        dailyTipCard
-                        statsRow
-                        recentScansCard
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Feed")
-                                .font(AppType.title(18))
-                                .foregroundStyle(.primary)
-
-                            LazyVStack(spacing: 10) {
-                                ForEach(feedCards) { card in
-                                    if card.opensChallengeMenu {
-                                        if shouldTrackHomeChallengeTutorial {
-                                            Button {
-                                                openChallengeMenu()
-                                            } label: {
-                                                HomeFeedCard(data: card)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .anchorPreference(key: HomeTutorialTargetPreferenceKey.self, value: .bounds) { anchor in
-                                                [.challenges: anchor]
-                                            }
-                                            .onAppear {
-                                                hasUserScrolledTowardChallenges = true
-                                                triggerHomeChallengeTutorialIfNeeded()
-                                            }
-                                        } else {
-                                            Button {
-                                                openChallengeMenu()
-                                            } label: {
-                                                HomeFeedCard(data: card)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    } else {
-                                        HomeFeedCard(data: card)
-                                    }
                                 }
+
+                                Spacer(minLength: 8)
+
+                                NavigationLink {
+                                    HelpCenterView()
+                                } label: {
+                                    Image(systemName: "questionmark")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundStyle(.primary)
+                                        .frame(width: 40, height: 40)
+                                        .liquidGlassButton(in: Circle(), interactive: true)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Open help")
+                            }
+
+                            streakHeroCard
+                            scanNowHeroButton
+
+                            statsRow
+                            dailyTipCard
+                            challengeSection()
+                            insightsSection(cardWidth: min(320, pageGeo.size.width - 84))
+                        }
+                        .padding(.horizontal, AppLayout.pageHorizontalPadding(for: pageGeo.size.width))
+                        .padding(.top, AppLayout.pageTopPadding(for: pageGeo.size.width))
+                        .padding(.bottom, AppLayout.pageBottomPadding(for: pageGeo.size.width))
+                        .adaptivePageFrame(width: pageGeo.size.width)
+                    }
+                    .simultaneousGesture(homeChallengeTutorialDragGesture())
+                    .overlayPreferenceValue(HomeTutorialTargetPreferenceKey.self) { anchors in
+                        GeometryReader { proxy in
+                            Color.clear
+                                .onAppear {
+                                    let visible = challengesCardIsMostlyVisible(in: proxy, anchors: anchors)
+                                    updateChallengesCardVisibility(visible)
+                                }
+                                .onChange(of: challengesCardIsMostlyVisible(in: proxy, anchors: anchors)) { _, visible in
+                                    updateChallengesCardVisibility(visible)
+                                }
+
+                            if shouldTrackHomeChallengeTutorial,
+                               let step = homeChallengeTutorialStep,
+                               !showChallengeMenu,
+                               let anchor = anchors[step.target] {
+                                TargetTutorialOverlay(
+                                    targetRect: proxy[anchor],
+                                    title: step.title,
+                                    message: step.message,
+                                    buttonTitle: step.buttonTitle,
+                                    onDone: step.showsCardButton ? {
+                                        handleHomeChallengeTutorialAction(step)
+                                    } : nil,
+                                    highlightStyle: step.highlightStyle,
+                                    showDirectionalArrow: step.showDirectionalArrow,
+                                    showPressIndicator: step.showPressIndicator,
+                                    onTargetTap: step.targetIsTappable ? {
+                                        handleHomeChallengeTutorialAction(step)
+                                    } : nil
+                                )
+                                .transition(.opacity)
+                                .zIndex(400)
                             }
                         }
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 24)
-                    .padding(.bottom, 120)
-                }
-                .overlayPreferenceValue(HomeTutorialTargetPreferenceKey.self) { anchors in
-                    if shouldTrackHomeChallengeTutorial,
-                       let step = homeChallengeTutorialStep,
-                       !showChallengeMenu,
-                       let anchor = anchors[step.target] {
-                        GeometryReader { proxy in
-                            TargetTutorialOverlay(
-                                targetRect: proxy[anchor],
-                                title: step.title,
-                                message: step.message,
-                                buttonTitle: step.buttonTitle,
-                                onDone: step.showsCardButton ? {
-                                    handleHomeChallengeTutorialAction(step, scrollProxy: scrollProxy)
-                                } : nil,
-                                highlightStyle: step.highlightStyle,
-                                showDirectionalArrow: step.showDirectionalArrow,
-                                showPressIndicator: step.showPressIndicator,
-                                onTargetTap: step.targetIsTappable ? {
-                                    handleHomeChallengeTutorialAction(step, scrollProxy: scrollProxy)
-                                } : nil
-                            )
-                            .transition(.opacity)
-                            .zIndex(400)
+                    .onChange(of: showChallengeMenu) { _, isPresented in
+                        guard !isPresented, queueLevelTutorialAfterChallengeSheet else { return }
+                        queueLevelTutorialAfterChallengeSheet = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                homeChallengeTutorialStep = .level
+                            }
                         }
                     }
-                }
-                .onChange(of: showChallengeMenu) { _, isPresented in
-                    guard !isPresented, queueLevelTutorialAfterChallengeSheet else { return }
-                    queueLevelTutorialAfterChallengeSheet = false
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        scrollProxy.scrollTo(homeTopAnchorID, anchor: .top)
+                    .onAppear {
+                        consumePendingHomeChallengeReplayIfNeeded()
                     }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            homeChallengeTutorialStep = .level
-                        }
+                    .onReceive(NotificationCenter.default.publisher(for: .reviveOpenHome)) { _ in
+                        consumePendingHomeChallengeReplayIfNeeded()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .reviveReplayHomeChallengeTutorial)) { _ in
+                        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: homeChallengeReplayRequestedAtKey)
+                        UserDefaults.standard.set(true, forKey: homeChallengeReplayPendingKey)
+                        consumePendingHomeChallengeReplayIfNeeded()
                     }
                 }
             }
@@ -355,6 +396,21 @@ struct HomeFeedView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .zIndex(330)
             }
+
+            if showStreakCompletionToast, let reward = activeStreakReward {
+                VStack {
+                    StreakCompletionToast(
+                        reward: reward,
+                        progress: streakToastProgress,
+                        showsCheck: streakToastShowsCheck
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.top, showChallengeCompletionToast ? 68 : 12)
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(340)
+            }
         }
         .sheet(isPresented: $showChallengeMenu) {
             ChallengeMenuView(
@@ -363,16 +419,30 @@ struct HomeFeedView: View {
                 entries: history.entries
             )
         }
+        .sheet(isPresented: $showStreakMenu) {
+            StreakMenuView(
+                streak: streakStats,
+                milestones: ChallengeProgression.streakMilestones(),
+                claimedMilestoneDays: ChallengeProgression.claimedStreakMilestoneDays(),
+                onScanNow: {
+                    showStreakMenu = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                        openCapture()
+                    }
+                }
+            )
+        }
         .animation(.easeInOut(duration: 0.22), value: showChallengeConfetti)
         .animation(.easeInOut(duration: 0.2), value: showChallengeCompletionToast)
+        .animation(.easeInOut(duration: 0.2), value: showStreakCompletionToast)
         .onAppear {
             shouldTrackHomeChallengeTutorial = !UserDefaults.standard.bool(forKey: homeChallengeTutorialKey)
-            refreshHomeMetrics()
             refreshProgressionState()
+            refreshStreakStateAndRewards()
             autoCompleteEligibleChallenges()
         }
         .onChange(of: history.entries) { _, _ in
-            refreshHomeMetrics()
+            refreshStreakStateAndRewards()
             autoCompleteEligibleChallenges()
         }
         .onReceive(NotificationCenter.default.publisher(for: .reviveChallengeProgressUpdated)) { _ in
@@ -381,6 +451,10 @@ struct HomeFeedView: View {
         .onDisappear {
             challengeToastTask?.cancel()
             challengeToastTask = nil
+            streakToastTask?.cancel()
+            streakToastTask = nil
+            isHomeScrollDragging = false
+            shouldTriggerChallengeTutorialAfterDragEnds = false
         }
     }
 
@@ -480,67 +554,256 @@ struct HomeFeedView: View {
         }
     }
 
-    private var recentScansCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Recent Scans")
-                .font(AppType.title(17))
-                .foregroundStyle(.primary)
-
-            if recentEntries.isEmpty {
-                Text("No scans yet. Use Capture to analyze your first item.")
-                    .font(AppType.body(13))
-                    .foregroundStyle(.primary.opacity(0.72))
-            } else {
-                ForEach(recentEntries) { entry in
-                    HStack(spacing: 10) {
-                        Circle()
-                            .fill(entry.recycleStatus == .recycled ? AppTheme.mint : Color.white.opacity(0.24))
-                            .frame(width: 8, height: 8)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.item.isEmpty ? "Item" : entry.item)
-                                .font(AppType.title(14))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-
-                            Text("\(entry.bin) • \(statusLabel(for: entry.recycleStatus))")
-                                .font(AppType.body(12))
-                                .foregroundStyle(.primary.opacity(0.72))
-                                .lineLimit(1)
-                        }
-
-                        Spacer()
-
-                        Text(formatCarbon(entry.carbonSavedKg))
+    private var streakHeroCard: some View {
+        Button {
+            showStreakMenu = true
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Current Streak")
                             .font(AppType.body(12))
-                            .foregroundStyle(AppTheme.mint.opacity(0.92))
+                            .foregroundStyle(.primary.opacity(0.72))
+
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("\(streakStats.currentDays)")
+                                .font(AppType.display(42))
+                                .foregroundStyle(.primary)
+                                .monospacedDigit()
+                            Text("days")
+                                .font(AppType.title(22))
+                                .foregroundStyle(.primary.opacity(0.9))
+                        }
                     }
-                    .padding(.vertical, 2)
+
+                    Spacer()
+
+                    ZStack {
+                        Circle()
+                            .fill(Color.orange.opacity(colorScheme == .light ? 0.2 : 0.28))
+                            .frame(width: 48, height: 48)
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 21, weight: .bold))
+                            .foregroundStyle(Color.orange)
+                    }
+                }
+
+                Text(streakHeadlineText)
+                    .font(AppType.title(16))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    if let nextDays = streakStats.nextMilestoneDays,
+                       let nextXP = streakStats.nextMilestoneXP {
+                        Text("Next: \(nextDays)d streak (+\(nextXP) XP)")
+                            .font(AppType.body(12))
+                            .foregroundStyle(AppTheme.mint.opacity(0.95))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                    } else {
+                        Text("All streak milestones unlocked")
+                            .font(AppType.body(12))
+                            .foregroundStyle(AppTheme.mint.opacity(0.95))
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.primary.opacity(0.55))
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(streakBackgroundGradient)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(AppTheme.mint.opacity(colorScheme == .light ? 0.38 : 0.30), lineWidth: 1)
+            )
+            .shadow(color: AppTheme.mint.opacity(colorScheme == .light ? 0.15 : 0.24), radius: 14, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var streakHeadlineText: String {
+        if streakStats.currentDays == 0 {
+            return "Start today and build your streak."
+        }
+        if streakStats.isRecordedToday {
+            return "Great work. Today's recycle is locked in."
+        }
+        return "Recycle today to keep your streak alive."
+    }
+
+    private var streakBackgroundGradient: LinearGradient {
+        if colorScheme == .light {
+            return LinearGradient(
+                colors: [
+                    Color(red: 0.95, green: 0.99, blue: 0.94),
+                    Color(red: 0.84, green: 0.95, blue: 0.86)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        return LinearGradient(
+            colors: [
+                Color(red: 0.09, green: 0.25, blue: 0.19),
+                Color(red: 0.05, green: 0.12, blue: 0.10)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var scanNowHeroButton: some View {
+        Button {
+            openCapture()
+        } label: {
+            ZStack {
+                Circle()
+                    .stroke(
+                        Color(red: 0.43, green: 0.96, blue: 0.77)
+                            .opacity(colorScheme == .light ? 0.92 : 1),
+                        lineWidth: 3
+                    )
+
+                Circle()
+                    .stroke(
+                        Color(red: 0.43, green: 0.96, blue: 0.77)
+                            .opacity(colorScheme == .light ? 0.54 : 0.68),
+                        lineWidth: 7
+                    )
+                    .padding(8)
+
+                Circle()
+                    .fill(
+                        colorScheme == .light
+                        ? Color(red: 0.66, green: 0.97, blue: 0.86)
+                        : Color(red: 0.50, green: 0.95, blue: 0.79)
+                    )
+                    .padding(16)
+
+                VStack(spacing: 8) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(0.82))
+
+                    Text("Scan Now")
+                        .font(AppType.title(24))
+                        .foregroundStyle(Color.black.opacity(0.9))
+                }
+            }
+            .frame(width: 210, height: 210)
+            .shadow(
+                color: Color(red: 0.43, green: 0.96, blue: 0.77)
+                    .opacity(colorScheme == .light ? 0.24 : 0.44),
+                radius: 24,
+                x: 0,
+                y: 10
+            )
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func challengeSection() -> some View {
+        if let challengeCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Challenges")
+                        .font(AppType.title(19))
+                        .foregroundStyle(.primary)
+
+                    Spacer()
+
+                    Button("View All") {
+                        openChallengeMenu()
+                    }
+                    .font(AppType.body(13))
+                    .foregroundStyle(AppTheme.mint)
+                    .buttonStyle(.plain)
+                }
+
+                if shouldTrackHomeChallengeTutorial {
+                    Button {
+                        openChallengeMenu()
+                    } label: {
+                        HomeFeedCard(data: challengeCard)
+                    }
+                    .buttonStyle(.plain)
+                    .id(homeChallengesCardID)
+                    .anchorPreference(key: HomeTutorialTargetPreferenceKey.self, value: .bounds) { anchor in
+                        [.challenges: anchor]
+                    }
+                } else {
+                    Button {
+                        openChallengeMenu()
+                    } label: {
+                        HomeFeedCard(data: challengeCard)
+                    }
+                    .buttonStyle(.plain)
+                    .id(homeChallengesCardID)
                 }
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .staticCard(cornerRadius: 22)
     }
 
-    private func statusLabel(for status: RecycleEntryStatus) -> String {
-        switch status {
-        case .markedForRecycle:
-            return "Marked"
-        case .recycled:
-            return "Recycled"
-        case .nonRecyclable:
-            return "Not recyclable"
+    private func insightsSection(cardWidth: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Insights")
+                .font(AppType.title(19))
+                .foregroundStyle(.primary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 12) {
+                    ForEach(insightCards) { card in
+                        HomeFeedCard(data: card)
+                            .frame(width: cardWidth, alignment: .leading)
+                            .id(card.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $activeInsightCardID)
+            .onAppear {
+                if activeInsightCardID == nil {
+                    activeInsightCardID = insightCards.first?.id
+                }
+            }
+
+            if !insightCards.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(insightCards) { card in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                activeInsightCardID = card.id
+                            }
+                        } label: {
+                            Capsule(style: .continuous)
+                                .fill(
+                                    activeInsightCardID == card.id
+                                    ? AppTheme.mint
+                                    : Color.primary.opacity(0.22)
+                                )
+                                .frame(width: activeInsightCardID == card.id ? 20 : 8, height: 8)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .animation(.easeInOut(duration: 0.2), value: activeInsightCardID)
+            }
         }
     }
 
-    private func formatCarbon(_ value: Double) -> String {
-        let clamped = max(0, value)
-        if clamped < 1 {
-            return String(format: "%.2f kg", clamped)
-        }
-        return String(format: "%.1f kg", clamped)
+    private func openCapture() {
+        NotificationCenter.default.post(name: .reviveOpenCapture, object: nil)
     }
 
     private func refreshProgressionState() {
@@ -548,8 +811,61 @@ struct HomeFeedView: View {
         completedChallengeIDs = ChallengeProgression.completedChallengeIDs()
     }
 
-    private func refreshHomeMetrics() {
-        metrics = HomeFeedMetrics(entries: history.entries)
+    private func refreshStreakStateAndRewards() {
+        streakStats = ChallengeProgression.streakStats(entries: history.entries)
+        let rewards = ChallengeProgression.claimStreakMilestones(entries: history.entries)
+        guard !rewards.isEmpty else { return }
+        refreshProgressionState()
+        triggerChallengeConfetti()
+        enqueueStreakRewards(rewards)
+    }
+
+    private func enqueueStreakRewards(_ rewards: [StreakMilestoneReward]) {
+        guard !rewards.isEmpty else { return }
+        streakRewardQueue.append(contentsOf: rewards)
+        presentNextStreakRewardIfNeeded()
+    }
+
+    private func presentNextStreakRewardIfNeeded() {
+        guard activeStreakReward == nil else { return }
+        guard !streakRewardQueue.isEmpty else { return }
+        let reward = streakRewardQueue.removeFirst()
+        activeStreakReward = reward
+        streakToastProgress = 0
+        streakToastShowsCheck = false
+
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.92)) {
+            showStreakCompletionToast = true
+        }
+
+        streakToastTask?.cancel()
+        streakToastTask = Task { @MainActor in
+            withAnimation(.linear(duration: 0.55)) {
+                streakToastProgress = 1
+            }
+
+            try? await Task.sleep(nanoseconds: 560_000_000)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeOut(duration: 0.12)) {
+                streakToastShowsCheck = true
+            }
+
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showStreakCompletionToast = false
+            }
+
+            try? await Task.sleep(nanoseconds: 230_000_000)
+            guard !Task.isCancelled else { return }
+
+            activeStreakReward = nil
+            streakToastProgress = 0
+            streakToastShowsCheck = false
+            presentNextStreakRewardIfNeeded()
+        }
     }
 
     private func openChallengeMenu(fromTutorial: Bool = false) {
@@ -563,18 +879,138 @@ struct HomeFeedView: View {
         showChallengeMenu = true
     }
 
-    private func triggerHomeChallengeTutorialIfNeeded() {
-        guard shouldTrackHomeChallengeTutorial else { return }
-        guard hasUserScrolledTowardChallenges else { return }
-        guard !UserDefaults.standard.bool(forKey: homeChallengeTutorialKey) else { return }
-        guard homeChallengeTutorialStep == nil else { return }
-        guard !showChallengeMenu else { return }
+    private func consumePendingHomeChallengeReplayIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: homeChallengeReplayPendingKey) else { return }
+
+        let requestedAt = defaults.double(forKey: homeChallengeReplayRequestedAtKey)
+        let requestAge = Date().timeIntervalSince1970 - requestedAt
+        let isRecentReplayRequest = requestedAt > 0 && requestAge <= 30
+        guard isRecentReplayRequest else {
+            defaults.set(false, forKey: homeChallengeReplayPendingKey)
+            defaults.removeObject(forKey: homeChallengeReplayRequestedAtKey)
+            return
+        }
+
+        defaults.set(false, forKey: homeChallengeReplayPendingKey)
+        defaults.removeObject(forKey: homeChallengeReplayRequestedAtKey)
+        restartHomeChallengeTutorialReplay()
+    }
+
+    private func restartHomeChallengeTutorialReplay() {
+        UserDefaults.standard.removeObject(forKey: homeChallengeTutorialKey)
+        shouldTrackHomeChallengeTutorial = true
+        hasUserScrolledTowardChallenges = true
+        queueLevelTutorialAfterChallengeSheet = false
         withAnimation(.easeInOut(duration: 0.2)) {
-            homeChallengeTutorialStep = .challenges
+            homeChallengeTutorialStep = nil
+        }
+        showChallengeMenu = false
+        isPreparingHomeChallengeTutorial = false
+        shouldTriggerChallengeTutorialAfterDragEnds = false
+        isHomeScrollDragging = false
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+            triggerHomeChallengeTutorialIfNeeded()
         }
     }
 
-    private func handleHomeChallengeTutorialAction(_ step: HomeChallengeTutorialStep, scrollProxy: ScrollViewProxy) {
+    private func triggerHomeChallengeTutorialIfNeeded() {
+        guard !isMainTutorialOverlayActive else { return }
+        guard shouldTrackHomeChallengeTutorial else { return }
+        guard hasUserScrolledTowardChallenges else { return }
+        guard isChallengesCardMostlyVisible else { return }
+        guard !UserDefaults.standard.bool(forKey: homeChallengeTutorialKey) else { return }
+        guard homeChallengeTutorialStep == nil else { return }
+        guard !showChallengeMenu else { return }
+        guard !isPreparingHomeChallengeTutorial else { return }
+        guard !isHomeScrollDragging else {
+            shouldTriggerChallengeTutorialAfterDragEnds = true
+            return
+        }
+
+        isPreparingHomeChallengeTutorial = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            guard !isMainTutorialOverlayActive else {
+                isPreparingHomeChallengeTutorial = false
+                return
+            }
+            guard shouldTrackHomeChallengeTutorial else {
+                isPreparingHomeChallengeTutorial = false
+                return
+            }
+            guard !UserDefaults.standard.bool(forKey: homeChallengeTutorialKey) else {
+                isPreparingHomeChallengeTutorial = false
+                return
+            }
+            guard homeChallengeTutorialStep == nil else {
+                isPreparingHomeChallengeTutorial = false
+                return
+            }
+            guard !showChallengeMenu else {
+                isPreparingHomeChallengeTutorial = false
+                return
+            }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                homeChallengeTutorialStep = .challenges
+            }
+            shouldTriggerChallengeTutorialAfterDragEnds = false
+            isPreparingHomeChallengeTutorial = false
+        }
+    }
+
+    private func homeChallengeTutorialDragGesture() -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+                if !isHomeScrollDragging {
+                    isHomeScrollDragging = true
+                }
+            }
+            .onEnded { value in
+                isHomeScrollDragging = false
+                let didScroll = abs(value.translation.height) > 12 || abs(value.translation.width) > 12
+                if didScroll {
+                    hasUserScrolledTowardChallenges = true
+                    triggerHomeChallengeTutorialIfNeeded()
+                }
+                guard shouldTriggerChallengeTutorialAfterDragEnds else { return }
+                shouldTriggerChallengeTutorialAfterDragEnds = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    triggerHomeChallengeTutorialIfNeeded()
+                }
+            }
+    }
+
+    private func challengesCardIsMostlyVisible(
+        in proxy: GeometryProxy,
+        anchors: [HomeTutorialTarget: Anchor<CGRect>]
+    ) -> Bool {
+        guard let anchor = anchors[.challenges] else { return false }
+        let rect = proxy[anchor]
+        guard rect.height > 0 else { return false }
+
+        let viewport = CGRect(origin: .zero, size: proxy.size)
+        let visibleHeight = viewport.intersection(rect).height
+        let visibleRatio = visibleHeight / rect.height
+        return visibleRatio >= 0.8
+    }
+
+    private func updateChallengesCardVisibility(_ visible: Bool) {
+        if visible != isChallengesCardMostlyVisible {
+            isChallengesCardMostlyVisible = visible
+        }
+        if visible {
+            triggerHomeChallengeTutorialIfNeeded()
+        }
+    }
+
+    private func strippedLeadingLabel(from text: String, label: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix(label.lowercased()) else { return trimmed }
+        return String(trimmed.dropFirst(label.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func handleHomeChallengeTutorialAction(_ step: HomeChallengeTutorialStep) {
         switch step {
         case .challenges:
             openChallengeMenu(fromTutorial: true)
@@ -584,9 +1020,6 @@ struct HomeFeedView: View {
             shouldTrackHomeChallengeTutorial = false
             withAnimation(.easeInOut(duration: 0.2)) {
                 homeChallengeTutorialStep = nil
-            }
-            withAnimation(.easeInOut(duration: 0.25)) {
-                scrollProxy.scrollTo(homeTopAnchorID, anchor: .top)
             }
         }
     }
@@ -770,7 +1203,6 @@ private struct HomeFeedMetrics {
     var markedCount: Int = 0
     var totalCarbonSavedKg: Double = 0
     var todayRecycledCount: Int = 0
-    var recentEntries: [HistoryEntry] = []
 
     init() {}
 
@@ -779,7 +1211,6 @@ private struct HomeFeedMetrics {
         markedCount = 0
         totalCarbonSavedKg = 0
         todayRecycledCount = 0
-        recentEntries = Array(entries.prefix(4))
 
         for entry in entries {
             switch entry.recycleStatus {
@@ -810,6 +1241,55 @@ private struct ChallengeCompletionToast: View {
                     .font(AppType.body(11))
                     .foregroundStyle(AppTheme.mint.opacity(0.92))
                 Text(title)
+                    .font(AppType.title(14))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            ZStack {
+                Circle()
+                    .fill(showsCheck ? AppTheme.mint : Color.white.opacity(0.05))
+
+                Circle()
+                    .trim(from: 0, to: showsCheck ? 1 : max(0, min(1, progress)))
+                    .stroke(AppTheme.mint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+
+                if showsCheck {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 24, height: 24)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+private struct StreakCompletionToast: View {
+    let reward: StreakMilestoneReward
+    let progress: CGFloat
+    let showsCheck: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Streak Milestone")
+                    .font(AppType.body(11))
+                    .foregroundStyle(AppTheme.mint.opacity(0.92))
+                Text("\(reward.days)-day streak • +\(reward.xpReward) XP")
                     .font(AppType.title(14))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
@@ -1014,7 +1494,9 @@ private struct HomeFeedCard: View {
             Text(data.body)
                 .font(AppType.body(14))
                 .foregroundStyle(.primary.opacity(0.86))
+                .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 1)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1179,6 +1661,148 @@ private struct ChallengeRow: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .staticCard(cornerRadius: 18)
+    }
+}
+
+private struct StreakMenuView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    let streak: RecycleStreakStats
+    let milestones: [StreakMilestoneReward]
+    let claimedMilestoneDays: Set<Int>
+    let onScanNow: () -> Void
+
+    private var streakStatusText: String {
+        if streak.currentDays == 0 {
+            return "No active streak yet."
+        }
+        if streak.isRecordedToday {
+            return "Today's recycle is recorded."
+        }
+        return "Recycle today to keep the streak alive."
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppTheme.backgroundGradient(colorScheme)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Current Streak")
+                                .font(AppType.body(12))
+                                .foregroundStyle(.primary.opacity(0.7))
+
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("\(streak.currentDays)")
+                                    .font(AppType.display(54))
+                                    .foregroundStyle(.primary)
+                                    .monospacedDigit()
+                                Text("days")
+                                    .font(AppType.title(24))
+                                    .foregroundStyle(.primary.opacity(0.9))
+                            }
+
+                            Text(streakStatusText)
+                                .font(AppType.body(13))
+                                .foregroundStyle(.primary.opacity(0.82))
+                        }
+                        .padding(18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .staticCard(cornerRadius: 22)
+
+                        HStack(spacing: 10) {
+                            streakStatTile(title: "Longest", value: "\(streak.longestDays) days")
+                            streakStatTile(
+                                title: "Next Reward",
+                                value: nextRewardLabel
+                            )
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Milestones")
+                                .font(AppType.title(18))
+                                .foregroundStyle(.primary)
+
+                            ForEach(milestones) { milestone in
+                                streakMilestoneRow(milestone)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+                    .padding(.bottom, 120)
+                }
+            }
+            .navigationTitle("Streak")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Scan Now") {
+                        onScanNow()
+                    }
+                    .foregroundStyle(AppTheme.mint)
+                }
+            }
+        }
+    }
+
+    private var nextRewardLabel: String {
+        if let days = streak.nextMilestoneDays, let xp = streak.nextMilestoneXP {
+            return "\(days)d (+\(xp) XP)"
+        }
+        return "All unlocked"
+    }
+
+    private func streakStatTile(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(AppType.body(10))
+                .foregroundStyle(.primary.opacity(0.58))
+            Text(value)
+                .font(AppType.title(15))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .staticCard(cornerRadius: 16)
+    }
+
+    private func streakMilestoneRow(_ milestone: StreakMilestoneReward) -> some View {
+        let claimed = claimedMilestoneDays.contains(milestone.days)
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(milestone.days)-Day Streak")
+                    .font(AppType.title(15))
+                    .foregroundStyle(.primary)
+                Text("+\(milestone.xpReward) XP")
+                    .font(AppType.body(12))
+                    .foregroundStyle(AppTheme.mint.opacity(0.92))
+            }
+            Spacer()
+            Text(claimed ? "Claimed" : "Locked")
+                .font(AppType.body(12))
+                .foregroundStyle(claimed ? .black : .primary.opacity(0.8))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(claimed ? AppTheme.mint : Color.white.opacity(0.14))
+                )
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .staticCard(cornerRadius: 16)
     }
 }
 

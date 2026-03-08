@@ -251,6 +251,7 @@ extension Notification.Name {
     static let reviveRequestSignIn = Notification.Name("revive.requestSignIn")
     static let reviveRequestUpgrade = Notification.Name("revive.requestUpgrade")
     static let reviveOpenHome = Notification.Name("revive.openHome")
+    static let reviveReplayHomeChallengeTutorial = Notification.Name("revive.replayHomeChallengeTutorial")
     static let reviveOpenCapture = Notification.Name("revive.openCapture")
     static let reviveOpenSubscription = Notification.Name("revive.openSubscription")
     static let reviveOpenTutorial = Notification.Name("revive.openTutorial")

@@ -73,7 +73,7 @@ private enum AddressLinkFormatter {
             if prefix.hasSuffix(":") || prefix.lowercased().hasPrefix("nearest disposal:") {
                 return lineText
             }
-            return "Nearest Disposal: \(address)"
+            return lineText
         }
         return normalizedLines.joined(separator: "\n")
     }

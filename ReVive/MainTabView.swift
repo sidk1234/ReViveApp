@@ -5,7 +5,6 @@
 
 import SwiftUI
 import Combine
-import UIKit
 
 struct MainTabView: View {
     enum Tab: Int, CaseIterable {
@@ -19,32 +18,26 @@ struct MainTabView: View {
     @State private var selection: Tab = .home
     @EnvironmentObject private var history: HistoryStore
     @EnvironmentObject private var auth: AuthStore
+    @EnvironmentObject private var leaderboard: LeaderboardStore
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    @Namespace private var tabSelectionNamespace
     @State private var showGuestPopup = false
     @State private var guestDismissTask: Task<Void, Never>?
     @State private var hasShownLaunchGuestPopup = false
     @State private var showResumeOverlay = false
     @State private var wasBackgrounded = false
-    @State private var showTutorialOffer = false
     @State private var showTutorialOverlay = false
     @State private var guestPopupDragOffsetY: CGFloat = 0
     @State private var tabButtonFrames: [Tab: CGRect] = [:]
+    @State private var lastPrimarySelection: Tab = .home
+    @State private var didRunInitialSignedInImpactSync = false
+    @State private var tutorialShouldReturnHomeOnDismiss = false
+    @AppStorage("revive.tutorial.mainTabs.didShowMandatory") private var didShowMandatoryMainTabsTutorial = false
+    @AppStorage("revive.tutorial.mainTabs.overlayVisible") private var isMainTutorialOverlayActive = false
 
     var body: some View {
         AnyView(baseView)
-            .alert(isPresented: $showTutorialOffer) {
-                Alert(
-                    title: Text(tutorialAlertTitle),
-                    message: Text(tutorialAlertMessage),
-                    primaryButton: .default(Text("Start")) {
-                        auth.consumeTutorialOffer()
-                        showTutorialOverlay = true
-                    },
-                    secondaryButton: .cancel(Text("Later")) {
-                        auth.consumeTutorialOffer()
-                    }
-                )
-            }
     }
 
     private var baseView: some View {
@@ -92,6 +85,9 @@ struct MainTabView: View {
             .onChange(of: auth.user?.id ?? "") { _, newValue in
                 handleUserIDChange(newValue)
             }
+            .onChange(of: auth.session?.accessToken ?? "") { _, token in
+                handleAccessTokenChange(token)
+            }
             .onAppear {
                 handleOnAppear()
             }
@@ -103,25 +99,22 @@ struct MainTabView: View {
             }
     }
 
-    private let tutorialAlertTitle = "Take a quick tutorial?"
-    private let tutorialAlertMessage = "Learn Capture, result details, and how to mark items as recycled in under a minute."
-
     private var mainContent: some View {
         ZStack(alignment: .top) {
             TabView(selection: $selection) {
-                NavigationStack {
-                    BinView()
-                }
-                .tabItem {
-                    Label("Bin", systemImage: "trash.fill")
-                }
-                .tag(Tab.bin)
-
                 CameraScreen(guestHeaderInset: guestControlInset)
                     .tabItem {
                         Label("Capture", systemImage: "camera.fill")
                     }
                 .tag(Tab.camera)
+
+                NavigationStack {
+                    BinView()
+                }
+                .tabItem {
+                    Label("Bin", systemImage: "trash.fill")
+                    }
+                 .tag(Tab.bin)
 
                 NavigationStack {
                     HomeFeedView()
@@ -145,14 +138,19 @@ struct MainTabView: View {
                     }
                     .tag(Tab.account)
             }
-
-            TabBarCentersReader(tabOrder: [.bin, .camera, .home, .leaderboard, .account]) { frames in
+            .toolbar(.hidden, for: .tabBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                floatingTabBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 6)
+                    .padding(.bottom, 6)
+            }
+            .onPreferenceChange(CustomTabFramePreferenceKey.self) { frames in
+                guard !frames.isEmpty else { return }
                 tabButtonFrames = frames
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .allowsHitTesting(false)
 
-            if showGuestPopup, !showTutorialOverlay, !auth.isSignedIn {
+            if shouldRenderGuestPopup {
                 GuestSignInPopup(
                     remaining: auth.guestQuota?.remaining,
                     limit: auth.guestQuota?.limit ?? auth.guestQuotaLimit,
@@ -180,12 +178,14 @@ struct MainTabView: View {
                 BeginnerTipsOverlay(
                     currentTab: $selection,
                     tabFrames: tabButtonFrames,
+                    bottomClearance: 138,
                     onClose: dismissTutorialOverlay
                 )
                 .transition(.opacity)
                 .zIndex(300)
             }
         }
+        .coordinateSpace(name: "mainTabSpace")
     }
 
     private func performInitialGuestQuotaFetch() async {
@@ -233,10 +233,13 @@ struct MainTabView: View {
     }
 
     private func handleOpenTutorialNotification(_ note: Notification) {
+        tutorialShouldReturnHomeOnDismiss = false
+        isMainTutorialOverlayActive = true
         showTutorialOverlay = true
     }
 
     private func handleTutorialVisibilityChange(_ isVisible: Bool) {
+        isMainTutorialOverlayActive = isVisible
         NotificationCenter.default.post(
             name: .reviveMainTutorialVisibilityChanged,
             object: isVisible
@@ -244,16 +247,24 @@ struct MainTabView: View {
     }
 
     private func handleSelectionChange(_ newValue: Tab) {
+        if newValue != .camera {
+            lastPrimarySelection = newValue
+        }
         handleGuestPopup(for: newValue)
     }
 
     private func handleAuthSignInChange(_ isSignedIn: Bool) {
+        leaderboard.setAccessToken(auth.session?.accessToken)
         if isSignedIn {
             dismissGuestPopup()
+            applyHistoryStorageScope()
+            performInitialSignedInImpactSyncIfNeeded()
             presentTutorialOfferIfNeeded()
             return
         }
 
+        applyHistoryStorageScope()
+        didRunInitialSignedInImpactSync = false
         hasShownLaunchGuestPopup = false
         Task { @MainActor in
             _ = await auth.fetchGuestQuota()
@@ -263,17 +274,21 @@ struct MainTabView: View {
 
     private func handleUserIDChange(_ userID: String) {
         guard !userID.isEmpty else { return }
-        Task { @MainActor in
-            await auth.refreshImpactFromServer(history: history)
-            if auth.autoSyncImpactEnabled {
-                auth.syncImpact(entries: history.entries, history: history)
-            }
-        }
+        applyHistoryStorageScope()
+        performInitialSignedInImpactSyncIfNeeded(force: true)
     }
 
     private func handleOnAppear() {
+        if !auth.isSignedIn, selection == .home {
+            resetGuestPopupStateImmediately()
+        }
+        isMainTutorialOverlayActive = showTutorialOverlay
+        leaderboard.setAccessToken(auth.session?.accessToken)
+        leaderboard.startPassiveRefresh()
+        applyHistoryStorageScope()
         syncBinReminder(for: history.entries)
         presentLaunchGuestPopupIfNeeded()
+        performInitialSignedInImpactSyncIfNeeded()
         presentTutorialOfferIfNeeded()
     }
 
@@ -285,7 +300,11 @@ struct MainTabView: View {
         switch newPhase {
         case .background:
             wasBackgrounded = true
+            leaderboard.stopPassiveRefresh()
         case .active:
+            leaderboard.setAccessToken(auth.session?.accessToken)
+            leaderboard.startPassiveRefresh()
+            leaderboard.refreshNow()
             if wasBackgrounded {
                 wasBackgrounded = false
                 playReopenAnimation()
@@ -297,21 +316,87 @@ struct MainTabView: View {
         }
     }
 
+    private func handleAccessTokenChange(_ token: String) {
+        let resolvedToken = token.isEmpty ? nil : token
+        leaderboard.setAccessToken(resolvedToken)
+        leaderboard.refreshNow()
+    }
+
     private func handleGuestSignInTap() {
         dismissGuestPopup()
         selection = .account
     }
 
+    private func performInitialSignedInImpactSyncIfNeeded(force: Bool = false) {
+        guard auth.isSignedIn else { return }
+        if !force, didRunInitialSignedInImpactSync { return }
+        didRunInitialSignedInImpactSync = true
+        Task { @MainActor in
+            await auth.refreshImpactFromServer(history: history)
+            if auth.autoSyncImpactEnabled {
+                auth.syncImpact(entries: history.entries, history: history)
+            }
+        }
+    }
+
+    private func applyHistoryStorageScope() {
+        guard auth.isSignedIn else {
+            history.setStorageScope(userID: nil)
+            return
+        }
+
+        guard let scopedUserID = resolvedSignedInUserIDForHistoryScope() else {
+            history.setStorageScope(userID: nil)
+            return
+        }
+
+        if let loadedUserID = auth.user?.id,
+           !loadedUserID.isEmpty,
+           loadedUserID == scopedUserID {
+            history.transferGuestEntriesToUserIfNeeded(userID: loadedUserID)
+        }
+        history.setStorageScope(userID: scopedUserID)
+    }
+
+    private func resolvedSignedInUserIDForHistoryScope() -> String? {
+        if let liveUserID = auth.user?.id.trimmingCharacters(in: .whitespacesAndNewlines),
+           !liveUserID.isEmpty {
+            return liveUserID
+        }
+
+        if let cachedUserID = auth.lastKnownSignedInUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !cachedUserID.isEmpty {
+            return cachedUserID
+        }
+
+        return nil
+    }
+
     private func presentTutorialOfferIfNeeded() {
+        guard !showTutorialOverlay else { return }
+
+        if !didShowMandatoryMainTabsTutorial {
+            didShowMandatoryMainTabsTutorial = true
+        }
+
         guard auth.isSignedIn else { return }
         guard auth.shouldOfferTutorialAfterSignup else { return }
-        guard !showTutorialOffer else { return }
-        guard !showTutorialOverlay else { return }
-        showTutorialOffer = true
+
+        tutorialShouldReturnHomeOnDismiss = false
+        auth.consumeTutorialOffer()
+        dismissGuestPopup()
+        isMainTutorialOverlayActive = true
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showTutorialOverlay = true
+        }
     }
 
     private func presentLaunchGuestPopupIfNeeded() {
         guard !auth.isSignedIn else {
+            dismissGuestPopup()
+            return
+        }
+        guard selection != .home else {
             dismissGuestPopup()
             return
         }
@@ -362,6 +447,13 @@ struct MainTabView: View {
         }
     }
 
+    private func resetGuestPopupStateImmediately() {
+        guestDismissTask?.cancel()
+        guestDismissTask = nil
+        guestPopupDragOffsetY = 0
+        showGuestPopup = false
+    }
+
     private func playReopenAnimation() {
         selection = .home
         showResumeOverlay = true
@@ -374,8 +466,14 @@ struct MainTabView: View {
     private func dismissTutorialOverlay() {
         auth.consumeTutorialOffer()
         dismissGuestPopup()
+        let shouldReturnHome = tutorialShouldReturnHomeOnDismiss
+        tutorialShouldReturnHomeOnDismiss = false
+        isMainTutorialOverlayActive = false
         withAnimation(.easeInOut(duration: 0.2)) {
             showTutorialOverlay = false
+        }
+        if shouldReturnHome {
+            selection = .home
         }
     }
 
@@ -392,11 +490,157 @@ struct MainTabView: View {
         return count
     }
 
+    private var shouldRenderGuestPopup: Bool {
+        showGuestPopup
+            && !showTutorialOverlay
+            && !auth.isSignedIn
+    }
+
     private var guestControlInset: CGFloat {
-        guard showGuestPopup, !showTutorialOverlay, !auth.isSignedIn else { return 0 }
+        guard shouldRenderGuestPopup else { return 0 }
         let baseInset: CGFloat = 102
         let dragLift = min(0, guestPopupDragOffsetY)
         return max(0, baseInset + dragLift)
+    }
+
+    private var dockTabs: [DockTabItem] {
+        [
+            DockTabItem(tab: .home, title: "Home", icon: "house.fill"),
+            DockTabItem(tab: .bin, title: "Bin", icon: "trash.fill"),
+            DockTabItem(tab: .leaderboard, title: "Ranks", icon: "trophy.fill"),
+            DockTabItem(tab: .account, title: "Account", icon: "person.crop.circle.fill")
+        ]
+    }
+
+    private var highlightedDockTab: Tab {
+        selection == .camera ? lastPrimarySelection : selection
+    }
+
+    private var floatingTabBar: some View {
+        VStack(spacing: 12) {
+            captureTabButton
+
+            HStack(spacing: 8) {
+                ForEach(dockTabs) { item in
+                    primaryTabButton(item)
+                }
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .fill(Color.black.opacity(colorScheme == .light ? 0.26 : 0.40))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .stroke(Color.white.opacity(colorScheme == .light ? 0.28 : 0.20), lineWidth: 1)
+            )
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .frame(maxWidth: 520)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 34, style: .continuous)
+                        .fill(Color.black.opacity(colorScheme == .light ? 0.18 : 0.35))
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                .stroke(Color.white.opacity(colorScheme == .light ? 0.32 : 0.18), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .light ? 0.18 : 0.38), radius: 16, x: 0, y: 10)
+        .background(alignment: .bottom) {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [AppTheme.emerald.opacity(0.45), .clear],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 125
+                    )
+                )
+                .frame(width: 260, height: 120)
+                .offset(y: 50)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var captureTabButton: some View {
+        let isSelected = selection == .camera
+
+        return Button {
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                selection = .camera
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 14, weight: .semibold))
+
+                Text("Capture")
+                    .font(AppType.title(16))
+            }
+            .foregroundStyle(.white.opacity(isSelected ? 1 : 0.9))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(isSelected ? 0.22 : 0.12))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.42 : 0.22), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .background(tabFrameReporter(for: .camera))
+    }
+
+    private func primaryTabButton(_ item: DockTabItem) -> some View {
+        let isSelected = highlightedDockTab == item.tab
+
+        return Button {
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                selection = item.tab
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: item.icon)
+                    .font(.system(size: 18, weight: .semibold))
+                Text(item.title)
+                    .font(AppType.body(13))
+            }
+            .foregroundStyle(.white.opacity(isSelected ? 0.98 : 0.85))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color.white.opacity(colorScheme == .light ? 0.26 : 0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .stroke(Color.white.opacity(colorScheme == .light ? 0.58 : 0.28), lineWidth: 1)
+                        )
+                        .shadow(color: Color.black.opacity(colorScheme == .light ? 0.12 : 0.30), radius: 10, x: 0, y: 6)
+                        .matchedGeometryEffect(id: "main.tab.selection", in: tabSelectionNamespace)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .background(tabFrameReporter(for: item.tab))
+    }
+
+    private func tabFrameReporter(for tab: Tab) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: CustomTabFramePreferenceKey.self,
+                value: [tab: proxy.frame(in: .named("mainTabSpace"))]
+            )
+        }
     }
 }
 
@@ -406,6 +650,8 @@ private struct GuestSignInPopup: View {
     let onDragOffsetChanged: (CGFloat) -> Void
     let onDismiss: () -> Void
     let onSignIn: () -> Void
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
     @State private var dragOffset: CGSize = .zero
 
     var body: some View {
@@ -456,14 +702,14 @@ private struct GuestSignInPopup: View {
         .padding(.leading, 16)
         .padding(.trailing, 44)
         .padding(.vertical, 12)
-        .frame(maxWidth: 430, alignment: .leading)
+        .frame(maxWidth: horizontalSizeClass == .regular ? 620 : 430, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.18), lineWidth: 1)
+                .stroke(guestPopupBorderColor, lineWidth: 1)
         )
         .overlay(alignment: .topTrailing) {
             Button {
@@ -514,6 +760,10 @@ private struct GuestSignInPopup: View {
         guard let remaining else { return "--" }
         return "\(max(0, remaining))"
     }
+
+    private var guestPopupBorderColor: Color {
+        colorScheme == .light ? Color.white.opacity(0.92) : Color.primary.opacity(0.18)
+    }
 }
 
 private struct AppResumeOverlay: View {
@@ -556,24 +806,25 @@ private struct AppResumeOverlay: View {
 private struct BeginnerTipsOverlay: View {
     @Binding var currentTab: MainTabView.Tab
     let tabFrames: [MainTabView.Tab: CGRect]
+    let bottomClearance: CGFloat
     let onClose: () -> Void
 
     @State private var stepIndex: Int = 0
 
     private let steps: [BeginnerTipStep] = [
         BeginnerTipStep(
-            title: "Bin Tab",
-            message: "Go to Bin after a scan. Tap an item to mark it recycled.",
-            targetTab: .bin
-        ),
-        BeginnerTipStep(
             title: "Capture Tab",
             message: "Tap Capture to scan an item and run analysis.",
             targetTab: .camera
         ),
         BeginnerTipStep(
+            title: "Bin Tab",
+            message: "Go to Bin after a scan. Tap an item to mark it recycled.",
+            targetTab: .bin
+        ),
+        BeginnerTipStep(
             title: "Home Tab",
-            message: "Open Home for today's recycling tip, stats, recent scans, and Challenges to earn XP.",
+            message: "Open Home for quick Scan Now access, today's recycling tip, stats, and Challenges to earn XP.",
             targetTab: .home
         ),
         BeginnerTipStep(
@@ -583,7 +834,7 @@ private struct BeginnerTipsOverlay: View {
         ),
         BeginnerTipStep(
             title: "Account Tab",
-            message: "Use Account to sign in, manage settings, and access Help. Go to Settings > Help to replay this tutorial anytime.",
+            message: "Use Account to sign in and manage settings. Open Home and tap the top-right question mark for Help and tutorial replays.",
             targetTab: .account
         )
     ]
@@ -664,7 +915,7 @@ private struct BeginnerTipsOverlay: View {
                             .stroke(Color.white.opacity(0.2), lineWidth: 1)
                     )
                     .padding(.horizontal, 14)
-                    .padding(.bottom, max(18, safeBottom + 70))
+                    .padding(.bottom, max(18, safeBottom + bottomClearance))
                 }
             }
             .onAppear {
@@ -685,107 +936,19 @@ private struct BeginnerTipStep {
     let targetTab: MainTabView.Tab
 }
 
-private struct TabBarCentersReader: UIViewRepresentable {
-    let tabOrder: [MainTabView.Tab]
-    let onUpdate: ([MainTabView.Tab: CGRect]) -> Void
+private struct DockTabItem: Identifiable {
+    let tab: MainTabView.Tab
+    let title: String
+    let icon: String
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = false
-        context.coordinator.configure(hostView: view, tabOrder: tabOrder, onUpdate: onUpdate)
-        context.coordinator.scheduleRefresh()
-        return view
-    }
+    var id: MainTabView.Tab { tab }
+}
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.configure(hostView: uiView, tabOrder: tabOrder, onUpdate: onUpdate)
-        context.coordinator.scheduleRefresh()
-    }
+private struct CustomTabFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [MainTabView.Tab: CGRect] = [:]
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    final class Coordinator {
-        private weak var hostView: UIView?
-        private var tabOrder: [MainTabView.Tab] = []
-        private var onUpdate: (([MainTabView.Tab: CGRect]) -> Void)?
-        private var lastFrames: [MainTabView.Tab: CGRect] = [:]
-
-        func configure(
-            hostView: UIView,
-            tabOrder: [MainTabView.Tab],
-            onUpdate: @escaping ([MainTabView.Tab: CGRect]) -> Void
-        ) {
-            self.hostView = hostView
-            self.tabOrder = tabOrder
-            self.onUpdate = onUpdate
-        }
-
-        func scheduleRefresh() {
-            DispatchQueue.main.async { [weak self] in
-                self?.refresh()
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                self?.refresh()
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.refresh()
-            }
-        }
-
-        private func refresh() {
-            guard let hostView, let onUpdate else { return }
-            guard let tabBar = findTabBar(from: hostView) else { return }
-
-            let buttons = tabBar.subviews
-                .filter { NSStringFromClass(type(of: $0)).contains("UITabBarButton") }
-                .sorted { $0.frame.minX < $1.frame.minX }
-
-            guard buttons.count >= tabOrder.count else { return }
-
-            var frames: [MainTabView.Tab: CGRect] = [:]
-            for (index, tab) in tabOrder.enumerated() {
-                let button = buttons[index]
-                let rect = button.convert(button.bounds, to: hostView)
-                let normalizedRect = CGRect(
-                    x: rounded(rect.origin.x),
-                    y: rounded(rect.origin.y),
-                    width: rounded(rect.size.width),
-                    height: rounded(rect.size.height)
-                )
-                frames[tab] = normalizedRect
-            }
-
-            guard !frames.isEmpty, frames != lastFrames else { return }
-            lastFrames = frames
-            onUpdate(frames)
-        }
-
-        private func rounded(_ value: CGFloat) -> CGFloat {
-            (value * 100).rounded() / 100
-        }
-
-        private func findTabBar(from view: UIView) -> UITabBar? {
-            if let tabBar = findTabBar(in: view) {
-                return tabBar
-            }
-            guard let window = view.window else { return nil }
-            return findTabBar(in: window)
-        }
-
-        private func findTabBar(in root: UIView) -> UITabBar? {
-            if let tabBar = root as? UITabBar {
-                return tabBar
-            }
-            for subview in root.subviews {
-                if let tabBar = findTabBar(in: subview) {
-                    return tabBar
-                }
-            }
-            return nil
-        }
+    static func reduce(value: inout [MainTabView.Tab: CGRect], nextValue: () -> [MainTabView.Tab: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 
@@ -793,4 +956,5 @@ private struct TabBarCentersReader: UIViewRepresentable {
     MainTabView()
         .environmentObject(HistoryStore())
         .environmentObject(AuthStore())
+        .environmentObject(LeaderboardStore())
 }

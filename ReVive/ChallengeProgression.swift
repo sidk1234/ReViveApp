@@ -53,10 +53,40 @@ struct ActiveChallenge: Identifiable {
     var xpReward: Int { template.xpReward }
 }
 
+struct RecycleStreakStats {
+    let currentDays: Int
+    let longestDays: Int
+    let isRecordedToday: Bool
+    let lastRecycledDay: Date?
+    let nextMilestoneDays: Int?
+    let nextMilestoneXP: Int?
+
+    var daysToNextMilestone: Int? {
+        guard let nextMilestoneDays else { return nil }
+        return max(0, nextMilestoneDays - currentDays)
+    }
+}
+
+struct StreakMilestoneReward: Identifiable {
+    let days: Int
+    let xpReward: Int
+
+    var id: String { "streak-\(days)" }
+}
+
 enum ChallengeProgression {
     private static let totalXPKey = "revive.challenge.total_xp"
     private static let completedChallengesKey = "revive.challenge.completed_ids"
+    private static let claimedStreakMilestonesKey = "revive.streak.claimed_milestones"
     private static let levelXPStep = 200
+    private static let streakMilestonesConfig: [StreakMilestoneReward] = [
+        StreakMilestoneReward(days: 3, xpReward: 50),
+        StreakMilestoneReward(days: 7, xpReward: 125),
+        StreakMilestoneReward(days: 14, xpReward: 260),
+        StreakMilestoneReward(days: 30, xpReward: 650),
+        StreakMilestoneReward(days: 60, xpReward: 1350),
+        StreakMilestoneReward(days: 100, xpReward: 2500),
+    ]
 
     static let templates: [ChallengeTemplate] = [
         ChallengeTemplate(
@@ -133,6 +163,15 @@ enum ChallengeProgression {
         return Set(values)
     }
 
+    static func streakMilestones() -> [StreakMilestoneReward] {
+        streakMilestonesConfig
+    }
+
+    static func claimedStreakMilestoneDays() -> Set<Int> {
+        let values = UserDefaults.standard.array(forKey: claimedStreakMilestonesKey) as? [Int] ?? []
+        return Set(values)
+    }
+
     static func level(for xp: Int) -> Int {
         max(1, (max(0, xp) / levelXPStep) + 1)
     }
@@ -142,6 +181,71 @@ enum ChallengeProgression {
         let level = level(for: safeXP)
         let base = (level - 1) * levelXPStep
         return (level: level, current: safeXP - base, target: levelXPStep)
+    }
+
+    static func streakStats(
+        entries: [HistoryEntry],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> RecycleStreakStats {
+        let recycledDays = uniqueRecycledDays(entries: entries, calendar: calendar)
+        guard !recycledDays.isEmpty else {
+            return RecycleStreakStats(
+                currentDays: 0,
+                longestDays: 0,
+                isRecordedToday: false,
+                lastRecycledDay: nil,
+                nextMilestoneDays: streakMilestonesConfig.first?.days,
+                nextMilestoneXP: streakMilestonesConfig.first?.xpReward
+            )
+        }
+
+        let daySet = Set(recycledDays)
+        let currentDays = currentStreakDays(from: daySet, now: now, calendar: calendar)
+        let longestDays = longestStreakDays(in: recycledDays, calendar: calendar)
+        let today = calendar.startOfDay(for: now)
+        let isRecordedToday = daySet.contains(today)
+        let lastRecycledDay = recycledDays.max()
+        let nextMilestone = streakMilestonesConfig.first(where: { $0.days > currentDays })
+
+        return RecycleStreakStats(
+            currentDays: currentDays,
+            longestDays: longestDays,
+            isRecordedToday: isRecordedToday,
+            lastRecycledDay: lastRecycledDay,
+            nextMilestoneDays: nextMilestone?.days,
+            nextMilestoneXP: nextMilestone?.xpReward
+        )
+    }
+
+    @discardableResult
+    static func claimStreakMilestones(
+        entries: [HistoryEntry],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [StreakMilestoneReward] {
+        let stats = streakStats(entries: entries, now: now, calendar: calendar)
+        guard stats.currentDays > 0 else { return [] }
+
+        var claimed = claimedStreakMilestoneDays()
+        var newlyEarned: [StreakMilestoneReward] = []
+        for milestone in streakMilestonesConfig where milestone.days <= stats.currentDays {
+            if !claimed.contains(milestone.days) {
+                claimed.insert(milestone.days)
+                newlyEarned.append(milestone)
+            }
+        }
+
+        guard !newlyEarned.isEmpty else { return [] }
+
+        let totalRewardXP = newlyEarned.reduce(0) { partial, milestone in
+            partial + max(0, milestone.xpReward)
+        }
+        let newXP = currentXP() + totalRewardXP
+        UserDefaults.standard.set(newXP, forKey: totalXPKey)
+        UserDefaults.standard.set(Array(claimed).sorted(), forKey: claimedStreakMilestonesKey)
+        NotificationCenter.default.post(name: .reviveChallengeProgressUpdated, object: nil)
+        return newlyEarned.sorted(by: { $0.days < $1.days })
     }
 
     static func isEligible(_ challenge: ActiveChallenge, entries: [HistoryEntry], now: Date = Date()) -> Bool {
@@ -313,6 +417,54 @@ enum ChallengeProgression {
             return String(format: "%.2f", clamped)
         }
         return String(format: "%.1f", clamped)
+    }
+
+    private static func uniqueRecycledDays(entries: [HistoryEntry], calendar: Calendar) -> [Date] {
+        let days = entries
+            .filter { $0.recycleStatus == .recycled }
+            .map { calendar.startOfDay(for: $0.date) }
+        return Array(Set(days)).sorted(by: { $0 < $1 })
+    }
+
+    private static func currentStreakDays(from daySet: Set<Date>, now: Date, calendar: Calendar) -> Int {
+        let today = calendar.startOfDay(for: now)
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today) else { return 0 }
+
+        var cursor: Date?
+        if daySet.contains(today) {
+            cursor = today
+        } else if daySet.contains(yesterday) {
+            cursor = yesterday
+        } else {
+            return 0
+        }
+
+        var streak = 0
+        while let day = cursor, daySet.contains(day) {
+            streak += 1
+            cursor = calendar.date(byAdding: .day, value: -1, to: day)
+        }
+        return streak
+    }
+
+    private static func longestStreakDays(in sortedDays: [Date], calendar: Calendar) -> Int {
+        guard !sortedDays.isEmpty else { return 0 }
+        var best = 1
+        var current = 1
+
+        for index in 1..<sortedDays.count {
+            let previous = sortedDays[index - 1]
+            let currentDay = sortedDays[index]
+            if let expected = calendar.date(byAdding: .day, value: 1, to: previous),
+               calendar.isDate(currentDay, inSameDayAs: expected) {
+                current += 1
+            } else {
+                current = 1
+            }
+            best = max(best, current)
+        }
+
+        return best
     }
 
     private static func cycleKey(for cadence: ChallengeCadence, now: Date) -> String {

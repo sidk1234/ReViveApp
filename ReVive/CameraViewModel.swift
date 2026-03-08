@@ -25,6 +25,14 @@ enum DisposalBin: String, CaseIterable, Codable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
+        if cleaned.contains("not accepted in curbside recycling")
+            || cleaned.contains("not recyclable")
+            || cleaned.contains("non-recyclable")
+            || cleaned.contains("non recyclable")
+            || cleaned.contains("do not recycle")
+        {
+            return .landfill
+        }
         if cleaned.contains("hazard") || cleaned.contains("paint") || cleaned.contains("chemical") || cleaned.contains("solvent") {
             return .hazardousWaste
         }
@@ -37,11 +45,11 @@ enum DisposalBin: String, CaseIterable, Codable {
         if cleaned.contains("compost") || cleaned.contains("food scrap") || cleaned.contains("organic") || cleaned.contains("yard waste") {
             return .compost
         }
-        if cleaned.contains("recycl") || cleaned.contains("curbside") || cleaned.contains("blue bin") {
-            return .recycling
-        }
         if cleaned.contains("landfill") || cleaned.contains("trash") || cleaned.contains("garbage") {
             return .landfill
+        }
+        if cleaned.contains("recycl") || cleaned.contains("blue bin") {
+            return .recycling
         }
         if cleaned.isEmpty || cleaned == "unknown" || cleaned == "n/a" || cleaned == "na" {
             return recyclableHint == true ? .recycling : .landfill
@@ -128,7 +136,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         if isConfigured { return }
 
         session.beginConfiguration()
-        session.sessionPreset = .photo
+        // `.high` reduces capture-to-segmentation latency versus full `.photo` while keeping enough detail for selection.
+        session.sessionPreset = .high
 
         guard let device = cameraDevice(for: currentCameraPosition) else {
             session.commitConfiguration()
@@ -301,9 +310,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             error == nil,
             let data = photo.fileDataRepresentation(),
             let raw = UIImage(data: data),
-            let fixed = raw.normalizedUp(),
-            let cg = fixed.cgImage
+            let fixed = raw.normalizedUp()
         else { return }
+
+        let workingImage = fixed.resizedIfNeeded(maxDimension: 1664)
+        guard let cg = workingImage.cgImage else { return }
 
         // store CI for export
         self.capturedCI = CIImage(cgImage: cg)
@@ -318,7 +329,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             self.latestSelectedPreviewImage = nil
         }
 
-        buildOverlays(from: cg, uiImage: fixed, dismissCaptureOnNoItems: true)
+        buildOverlays(from: cg, uiImage: workingImage, dismissCaptureOnNoItems: true)
     }
     
     @MainActor
@@ -371,7 +382,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                     location: location,
                     accessToken: accessToken
                 )
-                let parsed = self.parseResponse(text)
+                let parsed = self.parseResponse(text, locationContext: location)
                 await MainActor.run {
                     guard self.latestAnalysisRequestID == requestID else { return }
                     self.aiResultText = text
@@ -418,7 +429,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                     location: location,
                     accessToken: accessToken
                 )
-                let parsed = self.parseResponse(text)
+                let parsed = self.parseResponse(text, locationContext: location)
                 await MainActor.run {
                     guard self.latestAnalysisRequestID == requestID else { return }
                     self.aiResultText = text
@@ -496,19 +507,77 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
 
     private func bestMaskIndex(x: Int, y: Int) -> Int? {
-        var bestIndex: Int?
-        var bestScore: Int = 0
-        for (idx, mask) in instanceMasks.enumerated() {
-            let score = maskHitScore(in: mask.maskBuffer, x: x, y: y)
-            if score > bestScore {
-                bestScore = score
-                bestIndex = idx
-            }
+        guard !instanceMasks.isEmpty else { return nil }
+        let threshold: UInt8 = 80
+        let radius = 2
+
+        struct CandidateScore {
+            let index: Int
+            let exactHit: Bool
+            let neighborhoodScore: Int
         }
-        return bestIndex
+
+        func bestCandidate(at point: CGPoint) -> CandidateScore? {
+            var bestExact: CandidateScore?
+            var bestNearby: CandidateScore?
+
+            let px = Int(point.x)
+            let py = Int(point.y)
+
+            for (idx, mask) in instanceMasks.enumerated() {
+                let sample = maskPixelValue(in: mask.maskBuffer, x: px, y: py)
+                let score = neighborhoodMaskScore(
+                    in: mask.maskBuffer,
+                    x: px,
+                    y: py,
+                    radius: radius,
+                    threshold: threshold
+                )
+                let candidate = CandidateScore(
+                    index: idx,
+                    exactHit: sample > threshold,
+                    neighborhoodScore: score
+                )
+
+                if candidate.exactHit {
+                    if bestExact == nil || candidate.neighborhoodScore > bestExact!.neighborhoodScore {
+                        bestExact = candidate
+                    }
+                } else if candidate.neighborhoodScore > 0 {
+                    if bestNearby == nil || candidate.neighborhoodScore > bestNearby!.neighborhoodScore {
+                        bestNearby = candidate
+                    }
+                }
+            }
+
+            if let bestExact { return bestExact }
+            return bestNearby
+        }
+
+        return bestCandidate(at: CGPoint(x: x, y: y))?.index
     }
 
-    private func maskHitScore(in pb: CVPixelBuffer, x: Int, y: Int) -> Int {
+    private func maskPixelValue(in pb: CVPixelBuffer, x: Int, y: Int) -> UInt8 {
+        let w = CVPixelBufferGetWidth(pb)
+        let h = CVPixelBufferGetHeight(pb)
+        guard x >= 0, y >= 0, x < w, y < h else { return 0 }
+
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return 0 }
+        let bpr = CVPixelBufferGetBytesPerRow(pb)
+        let row = base.advanced(by: y * bpr)
+        return row.assumingMemoryBound(to: UInt8.self)[x]
+    }
+
+    private func neighborhoodMaskScore(
+        in pb: CVPixelBuffer,
+        x: Int,
+        y: Int,
+        radius: Int,
+        threshold: UInt8
+    ) -> Int {
         let w = CVPixelBufferGetWidth(pb)
         let h = CVPixelBufferGetHeight(pb)
         guard x >= 0, y >= 0, x < w, y < h else { return 0 }
@@ -524,22 +593,14 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             return row.assumingMemoryBound(to: UInt8.self)[sx]
         }
 
-        let threshold: UInt8 = 80
-        let radius = 3
         var score = 0
         for dy in -radius...radius {
             let yy = y + dy
             if yy < 0 || yy >= h { continue }
-            let fy = h - 1 - yy
             for dx in -radius...radius {
                 let xx = x + dx
                 if xx < 0 || xx >= w { continue }
-                let v1 = sample(xx, yy)
-                if v1 > threshold { score += 1 }
-                if fy >= 0 && fy < h {
-                    let v2 = sample(xx, fy)
-                    if v2 > threshold { score += 1 }
-                }
+                if sample(xx, yy) > threshold { score += 1 }
             }
         }
         return score
@@ -575,16 +636,16 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         stopSession()
 
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let fixed = image.normalizedUp(),
-                  let cg = fixed.cgImage
-            else { return }
+            guard let fixed = image.normalizedUp() else { return }
+            let workingImage = fixed.resizedIfNeeded(maxDimension: 1664)
+            guard let cg = workingImage.cgImage else { return }
 
             let capturedCI = CIImage(cgImage: cg)
             DispatchQueue.main.async {
                 self.capturedCI = capturedCI
             }
 
-            self.buildOverlays(from: cg, uiImage: fixed, dismissCaptureOnNoItems: true)
+            self.buildOverlays(from: cg, uiImage: workingImage, dismissCaptureOnNoItems: true)
         }
     }
 
@@ -723,6 +784,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                     self.handleNoItems(dismissCaptureOnNoItems: dismissCaptureOnNoItems)
                     return
                 }
+                let selectableInstances = IndexSet(obs.allInstances.prefix(24))
+                guard !selectableInstances.isEmpty else {
+                    self.handleNoItems(dismissCaptureOnNoItems: dismissCaptureOnNoItems)
+                    return
+                }
 
                 func scaledMaskCI(from rawMaskCI: CIImage) -> CIImage {
                     let sx = extent.width / rawMaskCI.extent.width
@@ -733,7 +799,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                 }
 
                 let combinedMaskBuffer = try obs.generateScaledMaskForImage(
-                    forInstances: obs.allInstances,
+                    forInstances: selectableInstances,
                     from: handler
                 )
                 let combinedMaskCI = scaledMaskCI(from: CIImage(cvPixelBuffer: combinedMaskBuffer))
@@ -754,11 +820,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                 let glowUI = UIImage(cgImage: glowCG, scale: uiImage.scale, orientation: .up)
 
                 var newMasks: [InstanceMaskItem] = []
-                newMasks.reserveCapacity(obs.allInstances.count)
+                newMasks.reserveCapacity(selectableInstances.count)
 
-                for instance in obs.allInstances {
+                for instance in selectableInstances {
                     let instanceBuffer = try obs.generateScaledMaskForImage(
-                        forInstances: [instance],
+                        forInstances: IndexSet(integer: instance),
                         from: handler
                     )
                     let instanceMaskCI = scaledMaskCI(from: CIImage(cvPixelBuffer: instanceBuffer))
@@ -766,7 +832,12 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                     guard let oneChannel = Self.makeOneComponent8Buffer(width: targetW, height: targetH) else { continue }
                     self.ciContext.render(instanceMaskCI, to: oneChannel)
 
-                    newMasks.append(InstanceMaskItem(maskBuffer: oneChannel, scaledMaskCI: instanceMaskCI))
+                    newMasks.append(
+                        InstanceMaskItem(
+                            maskBuffer: oneChannel,
+                            scaledMaskCI: instanceMaskCI
+                        )
+                    )
                 }
 
                 DispatchQueue.main.async {
@@ -856,29 +927,29 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
 
     // MARK: - Response parsing
-    private func parseResponse(_ text: String) -> AIRecyclingResult? {
+    private func parseResponse(_ text: String, locationContext: LocationContext?) -> AIRecyclingResult? {
         if let decoded = decodeResult(from: text) {
-            return sanitizeResult(decoded, fallbackText: text)
+            return sanitizeResult(decoded, fallbackText: text, locationContext: locationContext)
         }
         if let extracted = extractJSONCandidate(from: text),
            let decoded = decodeResult(from: extracted) {
-            return sanitizeResult(decoded, fallbackText: text)
+            return sanitizeResult(decoded, fallbackText: text, locationContext: locationContext)
         }
         if let parsed = parseKeyValueResponse(text) {
-            return sanitizeResult(parsed, fallbackText: text)
+            return sanitizeResult(parsed, fallbackText: text, locationContext: locationContext)
         }
         if let rescued = parseLooseResponse(text) {
-            return sanitizeResult(rescued, fallbackText: text)
+            return sanitizeResult(rescued, fallbackText: text, locationContext: locationContext)
         }
         let fallback = AIRecyclingResult(
             item: "unknown",
             material: "unknown",
             recyclable: false,
             bin: DisposalBin.landfill.rawValue,
-            notes: "Reason: Not accepted for recycling. Nearest Disposal: Check local municipal website",
+            notes: "This item is not accepted in curbside recycling.",
             carbonSavedKg: 0
         )
-        return sanitizeResult(fallback, fallbackText: text)
+        return sanitizeResult(fallback, fallbackText: text, locationContext: locationContext)
     }
 
     private func analyzeImageWithRetry(
@@ -973,6 +1044,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         let material = stringValue(["material", "primary_material", "composition"]) ?? "unknown"
         let notes = stringValue(["notes", "prep", "preparation", "instructions", "reason"]) ?? ""
         let bin = stringValue(["bin", "disposal", "destination", "where_to_put", "container"]) ?? DisposalBin.landfill.rawValue
+        let location = stringValue(["location", "disposal_location", "drop_off", "dropoff", "facility"]) ?? ""
         let recyclable = boolValue(["recyclable", "is_recyclable", "accepted"]) ?? inferRecyclable(from: bin)
         let carbonSavedKg = doubleValue([
             "carbonSavedKg",
@@ -994,7 +1066,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             recyclable: recyclable,
             bin: bin,
             notes: notes,
-            carbonSavedKg: carbonSavedKg
+            carbonSavedKg: carbonSavedKg,
+            disposalLocation: location
         )
     }
 
@@ -1005,6 +1078,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         let material = map["MATERIAL"] ?? map["PRIMARY_MATERIAL"] ?? "unknown"
         let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? map["REASON"] ?? ""
         let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? DisposalBin.landfill.rawValue
+        let location = map["LOCATION"] ?? map["DISPOSAL_LOCATION"] ?? map["DROP_OFF"] ?? map["DROPOFF"] ?? map["FACILITY"] ?? ""
         let carbonSavedKg = parseCarbonValue(
             map["CARBON_SAVED_KG"] ??
             map["CARBON_KG"] ??
@@ -1031,7 +1105,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             recyclable: recyclable,
             bin: bin,
             notes: notes,
-            carbonSavedKg: carbonSavedKg
+            carbonSavedKg: carbonSavedKg,
+            disposalLocation: location
         )
     }
 
@@ -1044,6 +1119,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             "MATERIAL", "PRIMARY_MATERIAL",
             "RECYCLABLE",
             "BIN", "DISPOSAL", "DESTINATION", "WHERE_TO_PUT",
+            "LOCATION", "DISPOSAL_LOCATION", "DROP_OFF", "DROPOFF", "FACILITY",
             "CARBON_SAVED_KG", "CARBON_KG", "CO2_SAVED_KG", "CO2E_SAVED_KG", "CARBON", "CO2_SAVED"
         ]
         let fieldsPattern = fields.joined(separator: "|")
@@ -1093,6 +1169,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         let material = map["MATERIAL"] ?? map["PRIMARY_MATERIAL"] ?? "unknown"
         let notes = map["NOTES"] ?? map["PREP"] ?? map["INSTRUCTIONS"] ?? map["REASON"] ?? ""
         let bin = map["BIN"] ?? map["DISPOSAL"] ?? map["DESTINATION"] ?? map["WHERE_TO_PUT"] ?? DisposalBin.landfill.rawValue
+        let location = map["LOCATION"] ?? map["DISPOSAL_LOCATION"] ?? map["DROP_OFF"] ?? map["DROPOFF"] ?? map["FACILITY"] ?? ""
         let recyclable = (map["RECYCLABLE"].flatMap(parseRecyclableString)) ?? inferRecyclable(from: bin)
         let carbonSavedKg = parseCarbonValue(
             map["CARBON_SAVED_KG"] ??
@@ -1112,13 +1189,14 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             recyclable: recyclable,
             bin: bin,
             notes: notes,
-            carbonSavedKg: carbonSavedKg
+            carbonSavedKg: carbonSavedKg,
+            disposalLocation: location
         )
     }
 
     private func inferRecyclable(from bin: String) -> Bool {
         let mapped = DisposalBin.from(rawValue: bin, recyclableHint: nil)
-        return mapped != .landfill && mapped != .hazardousWaste
+        return isRecyclableBin(mapped)
     }
 
 
@@ -1143,12 +1221,17 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         return String(text[start...end])
     }
 
-    private func sanitizeResult(_ result: AIRecyclingResult, fallbackText: String) -> AIRecyclingResult {
+    private func sanitizeResult(_ result: AIRecyclingResult, fallbackText: String, locationContext: LocationContext?) -> AIRecyclingResult {
         let fallbackMap = extractKeyValueMap(from: fallbackText)
         let fallbackItem = fallbackMap["ITEM"] ?? fallbackMap["PRODUCT"] ?? fallbackMap["NAME"] ?? fallbackMap["OBJECT"]
         let fallbackMaterial = fallbackMap["MATERIAL"] ?? fallbackMap["PRIMARY_MATERIAL"]
         let fallbackBin = fallbackMap["BIN"] ?? fallbackMap["DISPOSAL"] ?? fallbackMap["DESTINATION"] ?? fallbackMap["WHERE_TO_PUT"]
         let fallbackNotes = fallbackMap["NOTES"] ?? fallbackMap["PREP"] ?? fallbackMap["INSTRUCTIONS"] ?? fallbackMap["REASON"]
+        let fallbackLocation = fallbackMap["LOCATION"]
+            ?? fallbackMap["DISPOSAL_LOCATION"]
+            ?? fallbackMap["DROP_OFF"]
+            ?? fallbackMap["DROPOFF"]
+            ?? fallbackMap["FACILITY"]
         let fallbackCarbon = fallbackMap["CARBON_SAVED_KG"]
             ?? fallbackMap["CARBON_KG"]
             ?? fallbackMap["CO2_SAVED_KG"]
@@ -1156,45 +1239,97 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             ?? fallbackMap["CARBON"]
             ?? fallbackMap["CO2_SAVED"]
 
-        let sanitizedItem = sanitizedField(primary: result.item, fallback: fallbackItem, defaultValue: "Unidentified item", avoidUnknownIfPossible: true)
-        let sanitizedMaterial = sanitizedField(primary: result.material, fallback: fallbackMaterial, defaultValue: "Mixed material", avoidUnknownIfPossible: false)
-        let lowerItem = sanitizedItem.lowercased()
-        let itemUnknown = lowerItem == "unknown" || lowerItem.contains("unidentified")
-        let normalizedBin = DisposalBin.from(rawValue: sanitizedField(primary: result.bin, fallback: fallbackBin, defaultValue: DisposalBin.landfill.rawValue, avoidUnknownIfPossible: false), recyclableHint: result.recyclable)
-
-        let hintedRecyclable = result.recyclable || inferRecyclable(from: result.bin) || inferRecyclable(from: fallbackBin ?? "")
-        var sanitizedRecyclable = itemUnknown ? false : hintedRecyclable
-        if normalizedBin == .landfill {
-            sanitizedRecyclable = false
-        }
-        if normalizedBin == .hazardousWaste {
-            sanitizedRecyclable = false
-        }
-
         let baseNotes = sanitizedField(primary: result.notes, fallback: fallbackNotes, defaultValue: "No special prep.", avoidUnknownIfPossible: false)
-        let locationLabel = formattedDisposalLocation(from: result.bin)
+        let sanitizedItem = sanitizedField(primary: result.item, fallback: fallbackItem, defaultValue: "unknown", avoidUnknownIfPossible: false)
+        let sanitizedMaterial = sanitizedField(primary: result.material, fallback: fallbackMaterial, defaultValue: "Mixed material", avoidUnknownIfPossible: false)
+        let parsedBin = DisposalBin.from(
+            rawValue: sanitizedField(
+                primary: result.bin,
+                fallback: fallbackBin,
+                defaultValue: DisposalBin.landfill.rawValue,
+                avoidUnknownIfPossible: false
+            ),
+            recyclableHint: result.recyclable
+        )
+        let notesInferredBin = inferredDisposalBin(from: baseNotes)
+        let normalizedBin: DisposalBin = {
+            guard parsedBin == .landfill, let notesInferredBin else { return parsedBin }
+            return notesInferredBin
+        }()
+
+        let resolvedItem = refinedItemName(
+            sanitizedItem,
+            material: sanitizedMaterial,
+            notes: baseNotes,
+            bin: normalizedBin
+        )
+        let sanitizedRecyclable = isRecyclableBin(normalizedBin)
+
+        let locationLabel = formattedDisposalLocation(from: result.disposalLocation)
+            ?? formattedDisposalLocation(from: fallbackLocation)
+            ?? formattedDisposalLocation(from: result.bin)
             ?? formattedDisposalLocation(from: fallbackBin)
-            ?? formattedDisposalLocation(from: result.notes)
-            ?? formattedDisposalLocation(from: fallbackNotes)
+        let contextFallbackLocation = fallbackDisposalLocation(from: locationContext, for: normalizedBin)
         let reasonText = normalizedReason(from: baseNotes)
+        let disposalLocation = locationLabel
+            ?? contextFallbackLocation
         let sanitizedNotes: String
         if sanitizedRecyclable {
             sanitizedNotes = baseNotes.isEmpty ? "No special prep." : baseNotes
         } else {
-            let location = locationLabel ?? "Nearest Disposal: Check local municipal website"
-            sanitizedNotes = "Reason: \(reasonText). \(location)"
+            sanitizedNotes = conversationalNonRecyclableNotes(
+                reason: reasonText,
+                bin: normalizedBin
+            )
         }
 
         let sanitizedCarbonValue = sanitizedRecyclable ? sanitizedCarbon(primary: result.carbonSavedKg, fallback: fallbackCarbon) : 0
 
         return AIRecyclingResult(
-            item: sanitizedItem,
+            item: resolvedItem,
             material: sanitizedMaterial,
             recyclable: sanitizedRecyclable,
             bin: normalizedBin.rawValue,
             notes: sanitizedNotes,
-            carbonSavedKg: sanitizedCarbonValue
+            carbonSavedKg: sanitizedCarbonValue,
+            disposalLocation: disposalLocation
         )
+    }
+
+    private func inferredDisposalBin(from notes: String) -> DisposalBin? {
+        let lower = notes.lowercased()
+
+        // Avoid inferring recycling from negative phrases like
+        // "not accepted in curbside recycling programs".
+        if lower.contains("not accepted in curbside recycling")
+            || lower.contains("not recyclable")
+            || lower.contains("non-recyclable")
+            || lower.contains("non recyclable")
+            || lower.contains("do not recycle")
+        {
+            return nil
+        }
+        if lower.contains("e-waste") || lower.contains("electronic waste") {
+            return .eWaste
+        }
+        if lower.contains("hazardous") || lower.contains("household hazardous waste") {
+            return .hazardousWaste
+        }
+        if lower.contains("donat") || lower.contains("thrift") || lower.contains("reuse") {
+            return .donation
+        }
+        if lower.contains("compost") || lower.contains("organics") {
+            return .compost
+        }
+        if lower.contains("landfill") || lower.contains("trash") || lower.contains("garbage") {
+            return .landfill
+        }
+        return nil
+    }
+
+    private func refinedItemName(_ item: String, material _: String, notes _: String, bin _: DisposalBin) -> String {
+        // Preserve model-provided item names as-is; do not rewrite generic labels.
+        return item
     }
 
     private func sanitizeOutputValue(_ value: String) -> String {
@@ -1209,6 +1344,9 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         text = text.replacingOccurrences(of: "(?i)verify with your municipality", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?i)contact your city", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?i)consult (your )?local program", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)check\\s+local", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)municipal website", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)nearest disposal\\s*:\\s*", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\(\\(\\s*$", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\(\\s*$", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
@@ -1221,9 +1359,11 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         reason = reason.replacingOccurrences(of: "(?i)^reason\\s*[:\\-]\\s*", with: "", options: .regularExpression)
         reason = reason.replacingOccurrences(of: "(?i)nearest disposal\\s*:\\s*.*$", with: "", options: .regularExpression)
         reason = reason.replacingOccurrences(of: "(?i)nearest drop[- ]off\\s*:\\s*.*$", with: "", options: .regularExpression)
+        reason = reason.replacingOccurrences(of: "(?i)drop[- ]off\\s*:\\s*.*$", with: "", options: .regularExpression)
+        reason = reason.replacingOccurrences(of: "(?i)disposal (location|site)\\s*:\\s*.*$", with: "", options: .regularExpression)
         reason = reason.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
         if reason.isEmpty || canonicalizeUnknownToken(reason) == "unknown" {
-            return "Not recyclable in local curbside programs"
+            return "isn't accepted in curbside recycling"
         }
         return reason
     }
@@ -1232,14 +1372,24 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         guard let raw else { return nil }
         var cleaned = sanitizeOutputValue(raw)
         guard !cleaned.isEmpty else { return nil }
+        if let pipe = cleaned.firstIndex(of: "|") {
+            cleaned = String(cleaned[cleaned.index(after: pipe)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if let range = cleaned.range(of: "(?i)nearest disposal\\s*:\\s*", options: .regularExpression) {
             cleaned = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if let range = cleaned.range(of: "(?i)nearest drop[- ]off\\s*:\\s*", options: .regularExpression) {
             cleaned = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if cleaned.lowercased().contains("check local") || cleaned.lowercased().contains("municipal") {
-            return "Nearest Disposal: Check local municipal website"
+        if let range = cleaned.range(of: "(?i)drop[- ]off\\s*:\\s*", options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let range = cleaned.range(of: "(?i)disposal (location|site)\\s*:\\s*", options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let lower = cleaned.lowercased()
+        if lower.contains("check local") || lower.contains("municipal website") {
+            return nil
         }
         if let colon = cleaned.firstIndex(of: ":") {
             let left = String(cleaned[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1249,9 +1399,127 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             }
         }
         if isLikelyAddress(cleaned) {
-            return "Nearest Disposal: \(cleaned)"
+            return cleaned
+        }
+        if isLikelyCurbsideDescriptor(cleaned) {
+            return cleaned
         }
         return nil
+    }
+
+    private func isLikelyCurbsideDescriptor(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        if lower.contains("check local") || lower.contains("municipal website") {
+            return false
+        }
+
+        let hasContainerWord = lower.contains("bin")
+            || lower.contains("cart")
+            || lower.contains("tote")
+            || lower.contains("container")
+        let hasStreamWord = lower.contains("curbside")
+            || lower.contains("recycling")
+            || lower.contains("compost")
+            || lower.contains("organics")
+            || lower.contains("trash")
+            || lower.contains("landfill")
+        let hasColorWord = lower.contains("blue")
+            || lower.contains("green")
+            || lower.contains("black")
+            || lower.contains("gray")
+            || lower.contains("grey")
+            || lower.contains("brown")
+
+        if lower.contains("curbside") && hasStreamWord && (hasColorWord || hasContainerWord) {
+            return true
+        }
+        if hasContainerWord && (hasStreamWord || hasColorWord) {
+            return true
+        }
+        if hasStreamWord && hasColorWord {
+            return true
+        }
+        return false
+    }
+
+    private func isRecyclableBin(_ bin: DisposalBin) -> Bool {
+        switch bin {
+        case .recycling, .compost, .eWaste:
+            return true
+        case .landfill, .hazardousWaste, .donation:
+            return false
+        }
+    }
+
+    private func fallbackDisposalLocation(from context: LocationContext?, for bin: DisposalBin) -> String? {
+        let city = (context?.locality ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let state = (context?.administrativeArea ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let placePrefix: String? = {
+            if !city.isEmpty, !state.isEmpty { return "\(city), \(state)" }
+            if !city.isEmpty { return city }
+            if !state.isEmpty { return state }
+            return nil
+        }()
+
+        switch bin {
+        case .recycling:
+            if let placePrefix {
+                return "\(placePrefix) blue curbside recycling bin"
+            }
+            return "Blue curbside recycling bin"
+        case .compost:
+            if let placePrefix {
+                return "\(placePrefix) green curbside organics bin"
+            }
+            return "Green curbside organics bin"
+        case .landfill:
+            if let placePrefix {
+                return "\(placePrefix) black curbside landfill bin"
+            }
+            return "Black curbside landfill bin"
+        case .eWaste:
+            if let placePrefix {
+                return "\(placePrefix) e-waste drop-off facility"
+            }
+            return "E-waste drop-off facility"
+        case .hazardousWaste:
+            if let placePrefix {
+                return "\(placePrefix) household hazardous waste facility"
+            }
+            return "Household hazardous waste facility"
+        case .donation:
+            if let placePrefix {
+                return "\(placePrefix) donation center"
+            }
+            return "Donation center"
+        }
+    }
+
+    private func conversationalNonRecyclableNotes(
+        reason: String,
+        bin: DisposalBin,
+        location: String? = nil
+    ) -> String {
+        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmedReason.lowercased()
+        let reasonSentence: String
+        if lower.hasPrefix("this item") {
+            reasonSentence = trimmedReason.hasSuffix(".") ? trimmedReason : "\(trimmedReason)."
+        } else if bin == .eWaste {
+            reasonSentence = "This item needs e-waste handling and should not go in curbside bins."
+        } else if bin == .hazardousWaste {
+            reasonSentence = "This item needs hazardous-waste handling and should not go in curbside bins."
+        } else if bin == .donation {
+            reasonSentence = "This item is better suited for donation or reuse instead of disposal."
+        } else if trimmedReason.isEmpty {
+            reasonSentence = "This item isn't accepted in curbside recycling."
+        } else {
+            reasonSentence = "This item \(trimmedReason)."
+        }
+        if let location = location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
+            return "\(reasonSentence) \(location)"
+        }
+        return reasonSentence
     }
 
     private func isLikelyAddress(_ text: String) -> Bool {
@@ -1302,7 +1570,14 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
 
     private func parseRecyclableString(_ value: String) -> Bool? {
         let lower = value.lowercased()
-        if lower.contains("no") || lower.contains("false") || lower.contains("not recyclable") {
+        if lower.contains("no")
+            || lower.contains("false")
+            || lower.contains("not recyclable")
+            || lower.contains("non-recyclable")
+            || lower.contains("non recyclable")
+            || lower.contains("cannot be recycled")
+            || lower.contains("isn't recyclable")
+        {
             return false
         }
         if lower.contains("yes") || lower.contains("true") || lower.contains("recyclable") {
@@ -1409,6 +1684,7 @@ struct AIRecyclingResult: Codable, Equatable {
     let bin: String
     let notes: String
     let carbonSavedKg: Double
+    let disposalLocation: String?
 
     init(
         item: String,
@@ -1416,7 +1692,8 @@ struct AIRecyclingResult: Codable, Equatable {
         recyclable: Bool,
         bin: String,
         notes: String,
-        carbonSavedKg: Double = 0
+        carbonSavedKg: Double = 0,
+        disposalLocation: String? = nil
     ) {
         self.item = item
         self.material = material
@@ -1424,6 +1701,8 @@ struct AIRecyclingResult: Codable, Equatable {
         self.bin = bin
         self.notes = notes
         self.carbonSavedKg = max(0, carbonSavedKg)
+        let normalizedLocation = disposalLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.disposalLocation = (normalizedLocation?.isEmpty == false) ? normalizedLocation : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1440,6 +1719,11 @@ struct AIRecyclingResult: Codable, Equatable {
         case co2e_saved_kg
         case carbon
         case co2_saved
+        case disposalLocation
+        case disposal_location
+        case location
+        case drop_off
+        case dropOff
     }
 
     init(from decoder: Decoder) throws {
@@ -1454,6 +1738,16 @@ struct AIRecyclingResult: Codable, Equatable {
             ? decodedNotes
             : decodedReason
         notes = resolvedNotes ?? "No special prep."
+        let decodedLocationCandidates: [String?] = [
+            try? container.decodeIfPresent(String.self, forKey: .disposalLocation),
+            try? container.decodeIfPresent(String.self, forKey: .disposal_location),
+            try? container.decodeIfPresent(String.self, forKey: .location),
+            try? container.decodeIfPresent(String.self, forKey: .drop_off),
+            try? container.decodeIfPresent(String.self, forKey: .dropOff),
+        ]
+        disposalLocation = decodedLocationCandidates
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
 
         let carbonCandidates: [Double?] = [
             try? container.decode(Double.self, forKey: .carbonSavedKg),
@@ -1475,6 +1769,9 @@ struct AIRecyclingResult: Codable, Equatable {
         try container.encode(bin, forKey: .bin)
         try container.encode(notes, forKey: .notes)
         try container.encode(max(0, carbonSavedKg), forKey: .carbonSavedKg)
+        if let disposalLocation {
+            try container.encode(disposalLocation, forKey: .disposalLocation)
+        }
     }
 }
 

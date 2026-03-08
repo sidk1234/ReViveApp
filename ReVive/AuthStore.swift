@@ -42,6 +42,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     @Published private(set) var proBillingURL: String?
     @Published private(set) var proPortalURL: String?
     @Published private(set) var shouldOfferTutorialAfterSignup: Bool = false
+    @Published private(set) var lastKnownSignedInUserID: String?
 
     var displayErrorMessage: String? {
         guard let message = errorMessage, !message.isEmpty else { return nil }
@@ -107,14 +108,23 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     var canUpdatePassword: Bool { canEditEmailPassword || canAddPassword }
 
     private let sessionKey = "recai.supabase.session"
-    private let preferencesKey = "recai.user.preferences"
+    private let legacyPreferencesKey = "recai.user.preferences"
+    private let guestPreferencesKey = "recai.user.preferences.guest"
+    private let userPreferencesKeyPrefix = "recai.user.preferences.user."
     private let guestQuotaKey = "recai.guest.quota"
     private let guestQuotaFilename = "guest-quota.json"
     private let tutorialOfferKey = "recai.tutorial.offer_after_signup"
+    private let lastSignedInUserIDKey = "recai.last_signed_in_user_id"
     private var notificationObservers: [NSObjectProtocol] = []
     private var currentNonce: String?
     private var needsProfileRefresh = false
     private var didAttemptGoogleRestore = false
+    private var activePreferencesScope: PreferencesScope = .guest
+
+    private enum PreferencesScope: Equatable {
+        case guest
+        case user(String)
+    }
 
     // ✅ Updated: validate + log missing config
     private var supabase: SupabaseService? {
@@ -144,6 +154,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         loadPreferences()
         loadGuestQuota()
         shouldOfferTutorialAfterSignup = UserDefaults.standard.bool(forKey: tutorialOfferKey)
+        lastKnownSignedInUserID = UserDefaults.standard.string(forKey: lastSignedInUserIDKey)
 
         if SupabaseConfig.load() == nil {
             let diag = SupabaseConfig.diagnostics()
@@ -387,15 +398,24 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     }
 
     private func loadPreferences() {
-        guard let data = UserDefaults.standard.data(forKey: preferencesKey),
+        if case .guest = activePreferencesScope {
+            migrateLegacyGuestPreferencesIfNeeded()
+        }
+
+        let key = preferencesKey(for: activePreferencesScope)
+        guard let data = UserDefaults.standard.data(forKey: key),
               let stored = try? JSONDecoder().decode(UserPreferences.self, from: data)
-        else { return }
+        else {
+            preferences = .default
+            return
+        }
         preferences = stored
     }
 
     private func savePreferences(_ preferences: UserPreferences) {
         guard let data = try? JSONEncoder().encode(preferences) else { return }
-        UserDefaults.standard.set(data, forKey: preferencesKey)
+        let key = preferencesKey(for: activePreferencesScope)
+        UserDefaults.standard.set(data, forKey: key)
     }
 
     private func applyPreferences(_ preferences: UserPreferences, sync: Bool) {
@@ -416,6 +436,29 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         if preferences.hasAnyValue {
             pushPreferencesToServer(preferences)
         }
+    }
+
+    private func switchPreferencesScope(to scope: PreferencesScope) {
+        guard scope != activePreferencesScope else { return }
+        savePreferences(preferences)
+        activePreferencesScope = scope
+        loadPreferences()
+    }
+
+    private func preferencesKey(for scope: PreferencesScope) -> String {
+        switch scope {
+        case .guest:
+            return guestPreferencesKey
+        case .user(let userID):
+            return userPreferencesKeyPrefix + userID
+        }
+    }
+
+    private func migrateLegacyGuestPreferencesIfNeeded() {
+        guard UserDefaults.standard.data(forKey: guestPreferencesKey) == nil else { return }
+        guard let legacyData = UserDefaults.standard.data(forKey: legacyPreferencesKey) else { return }
+        UserDefaults.standard.set(legacyData, forKey: guestPreferencesKey)
+        UserDefaults.standard.removeObject(forKey: legacyPreferencesKey)
     }
 
     private func pushPreferencesToServer(_ preferences: UserPreferences) {
@@ -603,6 +646,18 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                     UserDefaults.standard.set(true, forKey: self.tutorialOfferKey)
                     await self.loadUserAndProfile()
                 } else {
+                    do {
+                        try await supabase.resendSignupConfirmation(email: trimmedEmail)
+                    } catch {
+                        let resendMessage = self.readableAuthError(error, provider: "email")
+                        let lowercased = resendMessage.lowercased()
+                        if lowercased.contains("already exists")
+                            || lowercased.contains("already registered")
+                            || lowercased.contains("user exists") {
+                            self.errorMessage = "An account already exists for this email. Please sign in instead."
+                            return
+                        }
+                    }
                     self.shouldOfferTutorialAfterSignup = true
                     UserDefaults.standard.set(true, forKey: self.tutorialOfferKey)
                     self.errorMessage = "Check your email to confirm your account."
@@ -642,9 +697,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             return
         }
         let trimmedPassword = confirmPassword?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmedPassword.isEmpty else {
-            errorMessage = "Enter your password to continue."
-            return
+        if canEditEmailPassword {
+            guard !trimmedPassword.isEmpty else {
+                errorMessage = "Enter your password to continue."
+                return
+            }
         }
 
         isLoading = true
@@ -994,6 +1051,56 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
     }
 
+    func deleteImpact(entry: HistoryEntry) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let supabase else { return }
+            guard let accessToken = await ensureValidSession() else { return }
+            guard let user = user else { return }
+
+            do {
+                try await supabase.deleteImpactEntry(
+                    userId: user.id,
+                    itemKey: ImpactKey.itemKey(item: entry.item, material: entry.material, bin: entry.bin),
+                    dayKey: ImpactKey.dayKey(for: entry.date),
+                    accessToken: accessToken
+                )
+            } catch {
+                self.errorMessage = "Failed to delete impact. Try again."
+            }
+        }
+    }
+
+    func deleteImpactEntries(_ entries: [HistoryEntry]) {
+        let dedupedEntries = bestEntriesForSync(entries)
+        guard !dedupedEntries.isEmpty else { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let supabase else { return }
+            guard let accessToken = await ensureValidSession() else { return }
+            guard let user = user else { return }
+
+            var hadFailure = false
+            for entry in dedupedEntries {
+                do {
+                    try await supabase.deleteImpactEntry(
+                        userId: user.id,
+                        itemKey: ImpactKey.itemKey(item: entry.item, material: entry.material, bin: entry.bin),
+                        dayKey: ImpactKey.dayKey(for: entry.date),
+                        accessToken: accessToken
+                    )
+                } catch {
+                    hadFailure = true
+                }
+            }
+
+            if hadFailure {
+                self.errorMessage = "Some impacts failed to delete. Try again."
+            }
+        }
+    }
+
     private func bestEntriesForSync(_ entries: [HistoryEntry]) -> [HistoryEntry] {
         var bestByKey: [String: HistoryEntry] = [:]
         for candidate in entries {
@@ -1082,6 +1189,9 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     private func clearSession() {
         session = nil
         user = nil
+        switchPreferencesScope(to: .guest)
+        lastKnownSignedInUserID = nil
+        UserDefaults.standard.removeObject(forKey: lastSignedInUserIDKey)
         errorMessage = nil
         isAdmin = false
         guestQuota = nil
@@ -1121,7 +1231,21 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         let profile: SupabaseUser
         do {
             profile = try await supabase.fetchUser(accessToken: accessToken)
-            await MainActor.run { self.user = profile }
+            let previousAppearanceMode = self.preferences.appearanceMode
+            await MainActor.run {
+                self.user = profile
+                self.switchPreferencesScope(to: .user(profile.id))
+                // Preserve the current runtime appearance unless cloud preferences explicitly define it.
+                // This prevents sign-in/signup from forcing a stale locally cached mode.
+                if profile.preferences?.appearanceMode == nil,
+                   self.preferences.appearanceMode != previousAppearanceMode {
+                    var preserved = self.preferences
+                    preserved.appearanceMode = previousAppearanceMode
+                    self.applyPreferences(preserved, sync: false)
+                }
+                self.lastKnownSignedInUserID = profile.id
+                UserDefaults.standard.set(profile.id, forKey: self.lastSignedInUserIDKey)
+            }
             syncPreferencesIfNeeded(remote: profile.preferences)
         } catch {
             await MainActor.run {

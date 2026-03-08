@@ -17,6 +17,11 @@ struct AccountView: View {
     @State private var showEditProfile = false
     @State private var showSettings = false
     @State private var isSigningOut = false
+    @State private var showSignOutPrompt = false
+    @State private var showSignInTransition = false
+    @State private var didAppear = false
+    @State private var previousSignedInState = false
+    @State private var signInTransitionNonce: Int = 0
     @State private var isStartingCheckout = false
     @State private var isStartingPortal = false
     @State private var billingMessage: String?
@@ -62,6 +67,7 @@ struct AccountView: View {
 
                 if auth.isSignedIn {
                     signedInContent
+                        .transition(.opacity)
                 } else {
                     GeometryReader { _ in
                         LoginScreen()
@@ -85,6 +91,7 @@ struct AccountView: View {
                             Spacer()
                         }
                     }
+                    .transition(.opacity)
                 }
 
                 NavigationLink(isActive: $showEditProfile) {
@@ -104,18 +111,27 @@ struct AccountView: View {
                 .hidden()
 
                 if isSigningOut {
-                    Color.black.opacity(0.18)
+                    Color.black.opacity(0.52)
                         .ignoresSafeArea()
                         .transition(.opacity)
                 }
-            }
-        }
-        .onChange(of: auth.isSignedIn) { _, newValue in
-            if !newValue {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isSigningOut = false
+
+                if showSignInTransition {
+                    SignInCelebrationOverlay()
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .zIndex(500)
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeInOut(duration: 0.28), value: auth.isSignedIn)
+        }
+        .onChange(of: auth.isSignedIn) { _, newValue in
+            handleSignedInStateChange(newValue)
+        }
+        .onDisappear {
+            signInTransitionNonce += 1
+            showSignInTransition = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .reviveOpenSubscription)) { _ in
             if auth.isSignedIn {
@@ -145,7 +161,20 @@ struct AccountView: View {
             refreshChallengeProgress()
         }
         .onAppear {
+            didAppear = true
+            previousSignedInState = auth.isSignedIn
             refreshChallengeProgress()
+        }
+        .fullScreenCover(isPresented: $showSignOutPrompt) {
+            SignOutPromptView(
+                isProcessing: isSigningOut,
+                onCancel: {
+                    showSignOutPrompt = false
+                },
+                onConfirm: {
+                    confirmSignOut()
+                }
+            )
         }
         .fullScreenCover(item: $billingStatusScreen) { screen in
             BillingResultView(screen: screen) {
@@ -159,72 +188,75 @@ struct AccountView: View {
     }
 
     private var signedInContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Text("Account")
-                        .font(AppType.display(30))
-                        .foregroundStyle(.primary)
-
-                    Spacer()
-
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape.fill")
-                            .font(.system(size: 16, weight: .bold))
+        GeometryReader { pageGeo in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Text("Account")
+                            .font(AppType.display(30))
                             .foregroundStyle(.primary)
-                            .frame(width: 40, height: 40)
-                            .liquidGlassButton(in: Circle(), interactive: true)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open settings")
-                }
 
-                accountHeader
-                if auth.didResolveSubscriptionState && !auth.hasActiveSubscription {
-                    subscriptionStatusCard
-                }
+                        Spacer()
 
-                if auth.isAdmin {
-                    NavigationLink {
-                        AdminPortalView()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Admin Portal")
-                                    .font(AppType.title(16))
-                                Text("Manage users, impact, and settings.")
-                                    .font(AppType.body(12))
-                                    .foregroundStyle(.primary.opacity(0.7))
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .bold))
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 40, height: 40)
+                                .liquidGlassButton(in: Circle(), interactive: true)
                         }
-                        .foregroundStyle(.primary)
-                        .padding(16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accountCard()
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open settings")
                     }
-                    .buttonStyle(.plain)
+
+                    accountHeader
+                    if auth.didResolveSubscriptionState && !auth.hasActiveSubscription {
+                        subscriptionStatusCard
+                    }
+
+                    if auth.isAdmin {
+                        NavigationLink {
+                            AdminPortalView()
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Admin Portal")
+                                        .font(AppType.title(16))
+                                    Text("Manage users, impact, and settings.")
+                                        .font(AppType.body(12))
+                                        .foregroundStyle(.primary.opacity(0.7))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14, weight: .bold))
+                            }
+                            .foregroundStyle(.primary)
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accountCard()
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if let errorMessage = auth.displayErrorMessage, !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .font(AppType.body(12))
+                            .foregroundStyle(colorScheme == .light ? Color.primary : Color.primary.opacity(0.78))
+                    }
+
+                    Text("Badges")
+                        .font(AppType.title(18))
+                        .foregroundStyle(.primary)
+
+                    badgeGrid
                 }
-
-                if let errorMessage = auth.displayErrorMessage, !errorMessage.isEmpty {
-                    Text(errorMessage)
-                        .font(AppType.body(12))
-                        .foregroundStyle(.primary.opacity(0.7))
-                }
-
-                Text("Badges")
-                    .font(AppType.title(18))
-                    .foregroundStyle(.primary)
-
-                badgeGrid
+                .padding(.horizontal, AppLayout.pageHorizontalPadding(for: pageGeo.size.width))
+                .padding(.top, AppLayout.pageTopPadding(for: pageGeo.size.width))
+                .padding(.bottom, AppLayout.pageBottomPadding(for: pageGeo.size.width))
+                .adaptivePageFrame(width: pageGeo.size.width)
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 28)
-            .padding(.bottom, 120)
         }
     }
 
@@ -348,13 +380,7 @@ struct AccountView: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isSigningOut = true
-                    }
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 180_000_000)
-                        auth.signOut()
-                    }
+                    showSignOutPrompt = true
                 } label: {
                     HStack {
                         Image(systemName: "rectangle.portrait.and.arrow.right")
@@ -623,7 +649,7 @@ struct AccountView: View {
     }
 
     private var badgeGrid: some View {
-        let columns = [GridItem(.flexible()), GridItem(.flexible())]
+        let columns = [GridItem(.adaptive(minimum: 170), spacing: 14)]
         return LazyVGrid(columns: columns, spacing: 14) {
             ForEach(badges) { badge in
                 BadgeCard(
@@ -631,6 +657,51 @@ struct AccountView: View {
                     unlocked: recyclableCount >= badge.threshold,
                     currentCount: recyclableCount
                 )
+            }
+        }
+    }
+
+    private func handleSignedInStateChange(_ isSignedIn: Bool) {
+        defer { previousSignedInState = isSignedIn }
+        if isSignedIn {
+            showSignOutPrompt = false
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isSigningOut = false
+            }
+            guard didAppear, !previousSignedInState else { return }
+            playSignInTransition()
+        } else {
+            signInTransitionNonce += 1
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isSigningOut = false
+                showSignInTransition = false
+            }
+            showSignOutPrompt = false
+        }
+    }
+
+    private func confirmSignOut() {
+        guard !isSigningOut else { return }
+        showSignOutPrompt = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isSigningOut = true
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 320_000_000)
+            auth.signOut()
+        }
+    }
+
+    private func playSignInTransition() {
+        signInTransitionNonce += 1
+        let nonce = signInTransitionNonce
+        withAnimation(.easeOut(duration: 0.12)) {
+            showSignInTransition = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) {
+            guard nonce == signInTransitionNonce else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                showSignInTransition = false
             }
         }
     }
@@ -656,12 +727,13 @@ private enum BillingStatusScreen: Identifiable {
 }
 
 private struct BillingResultView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let screen: BillingStatusScreen
     let onDone: () -> Void
 
     var body: some View {
         ZStack {
-            AppTheme.backgroundGradient(.dark)
+            AppTheme.backgroundGradient(colorScheme)
                 .ignoresSafeArea()
 
             VStack(spacing: 16) {
@@ -731,14 +803,186 @@ private struct BillingResultView: View {
         case .success:
             return AppTheme.mint
         case .error:
-            return Color.yellow
+            return colorScheme == .light
+                ? Color(red: 0.85, green: 0.48, blue: 0.0)
+                : Color.yellow
         }
+    }
+}
+
+private struct SignOutPromptView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let isProcessing: Bool
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            AppTheme.backgroundGradient(colorScheme)
+                .ignoresSafeArea()
+
+            Button {
+                onCancel()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+                    .liquidGlassButton(in: Circle(), interactive: !isProcessing)
+            }
+            .buttonStyle(.plain)
+            .disabled(isProcessing)
+            .padding(.leading, 20)
+            .padding(.top, 12)
+            .zIndex(20)
+
+            VStack(spacing: 16) {
+                Image(systemName: "person.crop.circle.badge.xmark")
+                    .font(.system(size: 46, weight: .bold))
+                    .foregroundStyle(.primary)
+
+                Text("Leaving So Soon?")
+                    .font(AppType.title(26))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+
+                Text("Your impact stays saved. Sign out now, or stay and keep your recycling streak going.")
+                    .font(AppType.body(14))
+                    .foregroundStyle(.primary.opacity(0.8))
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 12) {
+                    Button("Stay Here") {
+                        onCancel()
+                    }
+                    .font(AppType.title(15))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .liquidGlassButton(in: Capsule(), interactive: !isProcessing)
+                    .buttonStyle(.plain)
+                    .disabled(isProcessing)
+
+                    Button(isProcessing ? "Signing out..." : "Sign Out") {
+                        onConfirm()
+                    }
+                    .font(AppType.title(15))
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .liquidGlassButton(
+                        in: Capsule(),
+                        tint: Color.white.opacity(0.95),
+                        interactive: !isProcessing
+                    )
+                    .buttonStyle(.plain)
+                    .disabled(isProcessing)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 390)
+            .accountCard(cornerRadius: 24)
+            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+    }
+}
+
+private struct SignInCelebrationOverlay: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var animationStart = Date()
+    @State private var centerScale: CGFloat = 0.96
+
+    private let progressDuration: TimeInterval = 0.86
+
+    var body: some View {
+        ZStack {
+            overlayScrimColor
+                .ignoresSafeArea()
+
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { timeline in
+                let progress = progressValue(at: timeline.date)
+
+                VStack(spacing: 14) {
+                    ZStack {
+                        Circle()
+                            .fill(AppTheme.mint.opacity(0.12))
+                            .frame(width: 98, height: 98)
+                            .scaleEffect(centerScale)
+
+                        Circle()
+                            .stroke(progressTrackColor, lineWidth: 7)
+                            .frame(width: 90, height: 90)
+
+                        Circle()
+                            .trim(from: 0, to: progress)
+                            .stroke(
+                                AppTheme.mint,
+                                style: StrokeStyle(lineWidth: 7, lineCap: .round)
+                            )
+                            .frame(width: 90, height: 90)
+                            .rotationEffect(.degrees(-90))
+                            .scaleEffect(x: -1, y: 1)
+
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(.primary)
+                    }
+
+                    Text("Signed In")
+                        .font(AppType.title(24))
+                        .foregroundStyle(.primary)
+
+                    Text("Syncing your impact...")
+                        .font(AppType.body(12))
+                        .foregroundStyle(.primary.opacity(0.82))
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 22)
+                .frame(maxWidth: 286)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(cardBorderColor, lineWidth: 1)
+                )
+            }
+        }
+        .onAppear {
+            animationStart = Date()
+            centerScale = 0.96
+
+            withAnimation(.easeOut(duration: 0.22)) {
+                centerScale = 1
+            }
+        }
+    }
+
+    private func progressValue(at date: Date) -> CGFloat {
+        let elapsed = max(0, date.timeIntervalSince(animationStart))
+        return CGFloat(min(1, elapsed / progressDuration))
+    }
+
+    private var overlayScrimColor: Color {
+        colorScheme == .light ? Color.black.opacity(0.18) : Color.black.opacity(0.56)
+    }
+
+    private var cardBorderColor: Color {
+        colorScheme == .light ? Color.white.opacity(0.92) : Color.white.opacity(0.14)
+    }
+
+    private var progressTrackColor: Color {
+        colorScheme == .light ? Color.black.opacity(0.12) : Color.white.opacity(0.18)
     }
 }
 
 private struct EditProfileView: View {
     @EnvironmentObject private var auth: AuthStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var displayName: String = ""
     @State private var email: String = ""
     @State private var currentPassword: String = ""
@@ -759,7 +1003,7 @@ private struct EditProfileView: View {
 
     var body: some View {
         ZStack {
-            AppTheme.backgroundGradient(.dark)
+            AppTheme.backgroundGradient(colorScheme)
                 .ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
@@ -1998,11 +2242,8 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var locationManager = LocationManager()
     @State private var defaultZipInput: String = ""
+    @State private var didRequestLocationAutofill: Bool = false
     @FocusState private var zipFocused: Bool
-
-    private let homeChallengeTutorialKey = "revive.tutorial.home.challengeFlow"
-    private let captureFirstRecycleTutorialKey = "revive.tutorial.capture.firstRecycleAction"
-    private let binMarkAsRecycledTutorialKey = "revive.tutorial.bin.markAsRecycled"
 
     private var appearanceBinding: Binding<AppAppearanceMode> {
         Binding(
@@ -2050,7 +2291,6 @@ struct SettingsView: View {
                         if auth.isSignedIn {
                             accountCard
                         }
-                        helpCard
 
                         if !auth.isSignedIn {
                             Text("Sign in to sync preferences across devices.")
@@ -2082,8 +2322,15 @@ struct SettingsView: View {
             auth.updateDefaultZip(trimmed)
         }
         .onChange(of: locationManager.postalCode) { _, newValue in
+            guard didRequestLocationAutofill else { return }
             guard !newValue.isEmpty else { return }
             defaultZipInput = newValue
+            didRequestLocationAutofill = false
+        }
+        .onChange(of: locationManager.errorMessage) { _, newValue in
+            guard didRequestLocationAutofill else { return }
+            guard newValue != nil else { return }
+            didRequestLocationAutofill = false
         }
     }
 
@@ -2143,6 +2390,7 @@ struct SettingsView: View {
 
                     Button {
                         zipFocused = false
+                        didRequestLocationAutofill = true
                         locationManager.requestLocation()
                     } label: {
                         Image(systemName: "location.fill")
@@ -2233,140 +2481,6 @@ struct SettingsView: View {
         return settingsCard(content)
     }
 
-    private var helpCard: some View {
-        let content = VStack(alignment: .leading, spacing: 12) {
-            Text("Help")
-                .font(AppType.title(16))
-                .foregroundStyle(.primary)
-
-            Button {
-                replayMainTabTutorial()
-            } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Beginner Tips")
-                            .font(AppType.title(14))
-                        Text("Replay the tab walkthrough overlay.")
-                            .font(AppType.body(11))
-                            .foregroundStyle(.primary.opacity(0.7))
-                    }
-                    Spacer()
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                replayHomeChallengeTutorial()
-            } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Challenges Tutorial")
-                            .font(AppType.title(14))
-                        Text("Home challenges + progress highlight.")
-                            .font(AppType.body(11))
-                            .foregroundStyle(.primary.opacity(0.7))
-                    }
-                    Spacer()
-                    Image(systemName: "flag.checkered.2.crossed")
-                        .font(.system(size: 16, weight: .semibold))
-                }
-                .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                replayCaptureRecycleTutorial()
-            } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Capture Tutorial")
-                            .font(AppType.title(14))
-                        Text("Mark for Recycle step on Capture.")
-                            .font(AppType.body(11))
-                            .foregroundStyle(.primary.opacity(0.7))
-                    }
-                    Spacer()
-                    Image(systemName: "camera.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                }
-                .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                replayBinMarkTutorial()
-            } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Bin Tutorial")
-                            .font(AppType.title(14))
-                        Text("Mark as Recycled step in Bin.")
-                            .font(AppType.body(11))
-                            .foregroundStyle(.primary.opacity(0.7))
-                    }
-                    Spacer()
-                    Image(systemName: "trash.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                }
-                .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                resetAllTutorials()
-            } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Reset All Tutorials")
-                            .font(AppType.title(14))
-                        Text("Clears tutorial progress and opens Beginner Tips.")
-                            .font(AppType.body(11))
-                            .foregroundStyle(.primary.opacity(0.7))
-                    }
-                    Spacer()
-                    Image(systemName: "arrow.counterclockwise.circle.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-
-            Text("Challenges tutorial starts on Home after the Challenges card appears.")
-                .font(AppType.body(11))
-                .foregroundStyle(.primary.opacity(0.62))
-        }
-        return settingsCard(content)
-    }
-
-    private func replayMainTabTutorial() {
-        NotificationCenter.default.post(name: .reviveOpenTutorial, object: nil)
-    }
-
-    private func replayHomeChallengeTutorial() {
-        UserDefaults.standard.removeObject(forKey: homeChallengeTutorialKey)
-        NotificationCenter.default.post(name: .reviveOpenHome, object: nil)
-    }
-
-    private func replayCaptureRecycleTutorial() {
-        UserDefaults.standard.removeObject(forKey: captureFirstRecycleTutorialKey)
-        NotificationCenter.default.post(name: .reviveOpenCapture, object: nil)
-    }
-
-    private func replayBinMarkTutorial() {
-        UserDefaults.standard.removeObject(forKey: binMarkAsRecycledTutorialKey)
-        NotificationCenter.default.post(name: .reviveOpenBin, object: nil)
-    }
-
-    private func resetAllTutorials() {
-        UserDefaults.standard.removeObject(forKey: homeChallengeTutorialKey)
-        UserDefaults.standard.removeObject(forKey: captureFirstRecycleTutorialKey)
-        UserDefaults.standard.removeObject(forKey: binMarkAsRecycledTutorialKey)
-        replayMainTabTutorial()
-    }
-
 
     private func settingsCard<Content: View>(_ content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -2421,7 +2535,11 @@ struct AccountSettingsView: View {
                         }
 
                         Button {
-                            showPasswordStep = true
+                            if auth.canEditEmailPassword {
+                                showPasswordStep = true
+                            } else {
+                                showFinalDeleteDialog = true
+                            }
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "trash")
@@ -2529,7 +2647,7 @@ struct AccountSettingsView: View {
         .alert("Final confirmation", isPresented: $showFinalDeleteDialog) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                auth.deleteAccount(confirmPassword: deletePassword)
+                auth.deleteAccount(confirmPassword: auth.canEditEmailPassword ? deletePassword : nil)
                 deletePassword = ""
             }
         } message: {

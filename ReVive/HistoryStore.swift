@@ -18,6 +18,16 @@ enum RecycleEntryStatus: String, Codable {
     case nonRecyclable = "non_recyclable"
 }
 
+private func normalizedDisposalLocation(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+private func inferredDisposalLocationFromRawPayload(_ rawPayload: String) -> String? {
+    normalizedDisposalLocation(DisposalLocationFormatter.extractedFromRawPayload(rawPayload))
+}
+
 struct HistoryScan: Identifiable, Codable, Equatable {
     let id: UUID
     let date: Date
@@ -26,6 +36,7 @@ struct HistoryScan: Identifiable, Codable, Equatable {
     let recyclable: Bool
     let bin: String
     let notes: String
+    let disposalLocation: String?
     let carbonSavedKg: Double
     let rawJSON: String
     let source: HistorySource
@@ -40,6 +51,7 @@ struct HistoryScan: Identifiable, Codable, Equatable {
         recyclable: Bool,
         bin: String,
         notes: String,
+        disposalLocation: String? = nil,
         carbonSavedKg: Double,
         rawJSON: String,
         source: HistorySource,
@@ -53,11 +65,70 @@ struct HistoryScan: Identifiable, Codable, Equatable {
         self.recyclable = recyclable
         self.bin = bin
         self.notes = notes
+        self.disposalLocation = normalizedDisposalLocation(disposalLocation)
         self.carbonSavedKg = max(0, carbonSavedKg)
         self.rawJSON = rawJSON
         self.source = source
         self.localImagePath = localImagePath
         self.remoteImagePath = remoteImagePath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case date
+        case item
+        case material
+        case recyclable
+        case bin
+        case notes
+        case disposalLocation
+        case disposal_location
+        case location
+        case carbonSavedKg
+        case rawJSON
+        case source
+        case localImagePath
+        case remoteImagePath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        date = try container.decode(Date.self, forKey: .date)
+        item = try container.decode(String.self, forKey: .item)
+        material = try container.decode(String.self, forKey: .material)
+        recyclable = try container.decode(Bool.self, forKey: .recyclable)
+        bin = try container.decode(String.self, forKey: .bin)
+        notes = try container.decode(String.self, forKey: .notes)
+        carbonSavedKg = max(0, try container.decodeIfPresent(Double.self, forKey: .carbonSavedKg) ?? 0)
+        rawJSON = try container.decode(String.self, forKey: .rawJSON)
+        source = (try? container.decode(HistorySource.self, forKey: .source)) ?? .photo
+        localImagePath = try? container.decode(String.self, forKey: .localImagePath)
+        remoteImagePath = try? container.decode(String.self, forKey: .remoteImagePath)
+        let decodedLocationCandidates: [String?] = [
+            try? container.decodeIfPresent(String.self, forKey: .disposalLocation),
+            try? container.decodeIfPresent(String.self, forKey: .disposal_location),
+            try? container.decodeIfPresent(String.self, forKey: .location),
+            inferredDisposalLocationFromRawPayload(rawJSON)
+        ]
+        disposalLocation = decodedLocationCandidates.compactMap(normalizedDisposalLocation).first
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(date, forKey: .date)
+        try container.encode(item, forKey: .item)
+        try container.encode(material, forKey: .material)
+        try container.encode(recyclable, forKey: .recyclable)
+        try container.encode(bin, forKey: .bin)
+        try container.encode(notes, forKey: .notes)
+        try container.encodeIfPresent(disposalLocation, forKey: .disposalLocation)
+        try container.encode(max(0, carbonSavedKg), forKey: .carbonSavedKg)
+        try container.encode(rawJSON, forKey: .rawJSON)
+        try container.encode(source, forKey: .source)
+        try container.encodeIfPresent(localImagePath, forKey: .localImagePath)
+        try container.encodeIfPresent(remoteImagePath, forKey: .remoteImagePath)
     }
 }
 
@@ -69,6 +140,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     let recyclable: Bool
     let bin: String
     let notes: String
+    let disposalLocation: String?
     let carbonSavedKg: Double
     var recycleStatus: RecycleEntryStatus
     let rawJSON: String
@@ -86,6 +158,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         recyclable: Bool,
         bin: String,
         notes: String,
+        disposalLocation: String? = nil,
         carbonSavedKg: Double,
         recycleStatus: RecycleEntryStatus,
         rawJSON: String,
@@ -102,6 +175,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         self.recyclable = recyclable
         self.bin = bin
         self.notes = notes
+        self.disposalLocation = normalizedDisposalLocation(disposalLocation)
         self.carbonSavedKg = max(0, carbonSavedKg)
         self.recycleStatus = recycleStatus
         self.rawJSON = rawJSON
@@ -118,6 +192,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
                     recyclable: recyclable,
                     bin: bin,
                     notes: notes,
+                    disposalLocation: self.disposalLocation,
                     carbonSavedKg: carbonSavedKg,
                     rawJSON: rawJSON,
                     source: source,
@@ -136,6 +211,9 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         case recyclable
         case bin
         case notes
+        case disposalLocation
+        case disposal_location
+        case location
         case carbonSavedKg
         case recycleStatus
         case rawJSON
@@ -159,6 +237,13 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         recycleStatus = (try? container.decode(RecycleEntryStatus.self, forKey: .recycleStatus))
             ?? (recyclable ? .recycled : .nonRecyclable)
         rawJSON = try container.decode(String.self, forKey: .rawJSON)
+        let decodedLocationCandidates: [String?] = [
+            try? container.decodeIfPresent(String.self, forKey: .disposalLocation),
+            try? container.decodeIfPresent(String.self, forKey: .disposal_location),
+            try? container.decodeIfPresent(String.self, forKey: .location),
+            inferredDisposalLocationFromRawPayload(rawJSON)
+        ]
+        disposalLocation = decodedLocationCandidates.compactMap(normalizedDisposalLocation).first
         source = (try? container.decode(HistorySource.self, forKey: .source)) ?? .photo
         localImagePath = try? container.decode(String.self, forKey: .localImagePath)
         remoteImagePath = try? container.decode(String.self, forKey: .remoteImagePath)
@@ -172,6 +257,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
                     recyclable: recyclable,
                     bin: bin,
                     notes: notes,
+                    disposalLocation: disposalLocation,
                     carbonSavedKg: carbonSavedKg,
                     rawJSON: rawJSON,
                     source: source,
@@ -194,6 +280,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         try container.encode(recyclable, forKey: .recyclable)
         try container.encode(bin, forKey: .bin)
         try container.encode(notes, forKey: .notes)
+        try container.encodeIfPresent(disposalLocation, forKey: .disposalLocation)
         try container.encode(max(0, carbonSavedKg), forKey: .carbonSavedKg)
         try container.encode(recycleStatus, forKey: .recycleStatus)
         try container.encode(rawJSON, forKey: .rawJSON)
@@ -216,11 +303,59 @@ final class HistoryStore: ObservableObject {
         case duplicate(HistoryEntry)
     }
 
-    private let storageKey = "recai.history.v1"
-    private let storageFilename = "impact-history.json"
+    private let legacyStorageKey = "recai.history.v1"
+    private let guestStorageKey = "recai.history.v1.guest"
+    private let userStorageKeyPrefix = "recai.history.v1.user."
+    private let legacyStorageFilename = "impact-history.json"
+    private let guestStorageFilename = "impact-history-guest.json"
+    private let userStorageFilenamePrefix = "impact-history-user-"
+    private var storageScope: StorageScope = .guest
+
+    private enum StorageScope: Equatable {
+        case guest
+        case user(String)
+    }
 
     init() {
         load()
+    }
+
+    func setStorageScope(userID: String?) {
+        let normalized = userID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextScope: StorageScope
+        if let normalized, !normalized.isEmpty {
+            nextScope = .user(normalized)
+        } else {
+            nextScope = .guest
+        }
+
+        guard nextScope != storageScope else { return }
+        save()
+        storageScope = nextScope
+        load()
+    }
+
+    func transferGuestEntriesToUserIfNeeded(userID: String) {
+        let normalizedUserID = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedUserID.isEmpty else { return }
+
+        let guestScope: StorageScope = .guest
+        let userScope: StorageScope = .user(normalizedUserID)
+
+        let guestEntries = loadEntries(for: guestScope)
+        guard !guestEntries.isEmpty else { return }
+
+        var userEntries = loadEntries(for: userScope)
+        for entry in guestEntries.sorted(by: { $0.date < $1.date }) {
+            mergeTransferredEntry(entry, into: &userEntries)
+        }
+        userEntries.sort { $0.date > $1.date }
+        saveEntries(userEntries, for: userScope)
+        clearStoredEntries(for: guestScope)
+
+        if storageScope == .guest, !entries.isEmpty {
+            entries = []
+        }
     }
 
     @discardableResult
@@ -254,6 +389,7 @@ final class HistoryStore: ObservableObject {
                 recyclable: result.recyclable,
                 bin: result.bin,
                 notes: result.notes,
+                disposalLocation: result.disposalLocation,
                 carbonSavedKg: result.carbonSavedKg,
                 rawJSON: rawJSON,
                 source: source,
@@ -269,6 +405,7 @@ final class HistoryStore: ObservableObject {
                 recyclable: shouldUpdateDetails ? result.recyclable : existing.recyclable,
                 bin: shouldUpdateDetails ? result.bin : existing.bin,
                 notes: shouldUpdateDetails ? result.notes : existing.notes,
+                disposalLocation: shouldUpdateDetails ? result.disposalLocation : existing.disposalLocation,
                 carbonSavedKg: shouldUpdateDetails ? result.carbonSavedKg : max(existing.carbonSavedKg, result.carbonSavedKg),
                 recycleStatus: mergedStatus,
                 rawJSON: shouldUpdateDetails ? rawJSON : existing.rawJSON,
@@ -293,6 +430,7 @@ final class HistoryStore: ObservableObject {
             recyclable: result.recyclable,
             bin: result.bin,
             notes: result.notes,
+            disposalLocation: result.disposalLocation,
             carbonSavedKg: result.carbonSavedKg,
             recycleStatus: newStatus,
             rawJSON: rawJSON,
@@ -308,6 +446,7 @@ final class HistoryStore: ObservableObject {
                     recyclable: result.recyclable,
                     bin: result.bin,
                     notes: result.notes,
+                    disposalLocation: result.disposalLocation,
                     carbonSavedKg: result.carbonSavedKg,
                     rawJSON: rawJSON,
                     source: source,
@@ -339,6 +478,7 @@ final class HistoryStore: ObservableObject {
             recyclable: existing.recyclable,
             bin: existing.bin,
             notes: existing.notes,
+            disposalLocation: existing.disposalLocation,
             carbonSavedKg: existing.carbonSavedKg,
             recycleStatus: .recycled,
             rawJSON: existing.rawJSON,
@@ -351,6 +491,21 @@ final class HistoryStore: ObservableObject {
         entries.remove(at: index)
         entries.insert(updated, at: 0)
         return updated
+    }
+
+    @discardableResult
+    func deleteEntry(entryID: UUID) -> HistoryEntry? {
+        guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return nil }
+        return entries.remove(at: index)
+    }
+
+    @discardableResult
+    func deleteEntries(entryIDs: Set<UUID>) -> [HistoryEntry] {
+        guard !entryIDs.isEmpty else { return [] }
+        let removed = entries.filter { entryIDs.contains($0.id) }
+        guard !removed.isEmpty else { return [] }
+        entries.removeAll { entryIDs.contains($0.id) }
+        return removed
     }
 
     func updateRemoteImagePath(entryID: UUID, path: String) {
@@ -395,6 +550,7 @@ final class HistoryStore: ObservableObject {
                     recyclable: shouldPreferExistingDetails ? existing.recyclable : row.recyclable,
                     bin: shouldPreferExistingDetails ? existing.bin : row.bin,
                     notes: shouldPreferExistingDetails ? existing.notes : row.notes,
+                    disposalLocation: existing.disposalLocation,
                     carbonSavedKg: max(existing.carbonSavedKg, remoteCarbonKg),
                     recycleStatus: mergedStatus(existing: existing.recycleStatus, incoming: remoteStatus),
                     rawJSON: existing.rawJSON.isEmpty ? "{}" : existing.rawJSON,
@@ -421,6 +577,7 @@ final class HistoryStore: ObservableObject {
                     recyclable: shouldPreferExistingDetails ? existing.recyclable : row.recyclable,
                     bin: shouldPreferExistingDetails ? existing.bin : row.bin,
                     notes: shouldPreferExistingDetails ? existing.notes : row.notes,
+                    disposalLocation: existing.disposalLocation,
                     carbonSavedKg: max(existing.carbonSavedKg, remoteCarbonKg),
                     recycleStatus: mergedStatus(existing: existing.recycleStatus, incoming: remoteStatus),
                     rawJSON: existing.rawJSON.isEmpty ? "{}" : existing.rawJSON,
@@ -441,6 +598,7 @@ final class HistoryStore: ObservableObject {
                     recyclable: row.recyclable,
                     bin: row.bin,
                     notes: row.notes,
+                    disposalLocation: nil,
                     carbonSavedKg: remoteCarbonKg,
                     recycleStatus: remoteStatus,
                     rawJSON: "{}",
@@ -456,6 +614,7 @@ final class HistoryStore: ObservableObject {
                             recyclable: row.recyclable,
                             bin: row.bin,
                             notes: row.notes,
+                            disposalLocation: nil,
                             carbonSavedKg: remoteCarbonKg,
                             rawJSON: "{}",
                             source: source,
@@ -584,33 +743,162 @@ final class HistoryStore: ObservableObject {
     }
 
     private func load() {
-        if let data = try? Data(contentsOf: storageURL()),
-           let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
-            entries = decoded
-            return
-        }
-
-        guard let legacy = UserDefaults.standard.data(forKey: storageKey) else { return }
-        if let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: legacy) {
-            entries = decoded
-            save()
-            UserDefaults.standard.removeObject(forKey: storageKey)
-        }
+        entries = loadEntries(for: storageScope)
+        migrateLegacyGuestStorageIfNeeded()
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        try? data.write(to: storageURL(), options: [.atomic])
-        UserDefaults.standard.set(data, forKey: storageKey)
+        saveEntries(entries, for: storageScope)
     }
 
     private func storageURL() -> URL {
+        storageURL(for: storageScope)
+    }
+
+    private func storageURL(for scope: StorageScope) -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("ReVive", isDirectory: true)
         if !FileManager.default.fileExists(atPath: dir.path) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        return dir.appendingPathComponent(storageFilename)
+        return dir.appendingPathComponent(storageFilename(for: scope))
+    }
+
+    private func legacyStorageURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("ReVive", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent(legacyStorageFilename)
+    }
+
+    private func storageKey() -> String {
+        storageKey(for: storageScope)
+    }
+
+    private func storageKey(for scope: StorageScope) -> String {
+        switch scope {
+        case .guest:
+            return guestStorageKey
+        case .user(let userID):
+            return userStorageKeyPrefix + userID
+        }
+    }
+
+    private func storageFilename() -> String {
+        storageFilename(for: storageScope)
+    }
+
+    private func storageFilename(for scope: StorageScope) -> String {
+        switch scope {
+        case .guest:
+            return guestStorageFilename
+        case .user(let userID):
+            return userStorageFilenamePrefix + sanitizedStorageIdentifier(userID) + ".json"
+        }
+    }
+
+    private func sanitizedStorageIdentifier(_ value: String) -> String {
+        let mapped = value.map { char -> Character in
+            if char.isLetter || char.isNumber {
+                return char
+            }
+            return "_"
+        }
+        let sanitized = String(mapped)
+        if sanitized.isEmpty {
+            return "unknown"
+        }
+        return String(sanitized.prefix(96))
+    }
+
+    private func loadEntries(for scope: StorageScope) -> [HistoryEntry] {
+        if let data = try? Data(contentsOf: storageURL(for: scope)),
+           let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+            return decoded
+        }
+
+        if let data = UserDefaults.standard.data(forKey: storageKey(for: scope)),
+           let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+            return decoded
+        }
+
+        if case .guest = scope {
+            if let data = UserDefaults.standard.data(forKey: legacyStorageKey),
+               let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+                return decoded
+            }
+
+            let legacyURL = legacyStorageURL()
+            if let data = try? Data(contentsOf: legacyURL),
+               let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+                return decoded
+            }
+        }
+
+        return []
+    }
+
+    private func saveEntries(_ value: [HistoryEntry], for scope: StorageScope) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        try? data.write(to: storageURL(for: scope), options: [.atomic])
+        UserDefaults.standard.set(data, forKey: storageKey(for: scope))
+    }
+
+    private func clearStoredEntries(for scope: StorageScope) {
+        try? FileManager.default.removeItem(at: storageURL(for: scope))
+        UserDefaults.standard.removeObject(forKey: storageKey(for: scope))
+        if case .guest = scope {
+            UserDefaults.standard.removeObject(forKey: legacyStorageKey)
+            try? FileManager.default.removeItem(at: legacyStorageURL())
+        }
+    }
+
+    private func migrateLegacyGuestStorageIfNeeded() {
+        guard case .guest = storageScope else { return }
+        guard !entries.isEmpty else { return }
+
+        let hasCurrentGuestData =
+            (UserDefaults.standard.data(forKey: guestStorageKey) != nil) ||
+            FileManager.default.fileExists(atPath: storageURL(for: .guest).path)
+        if !hasCurrentGuestData {
+            saveEntries(entries, for: .guest)
+        }
+        UserDefaults.standard.removeObject(forKey: legacyStorageKey)
+        try? FileManager.default.removeItem(at: legacyStorageURL())
+    }
+
+    private func mergeTransferredEntry(_ incoming: HistoryEntry, into list: inout [HistoryEntry]) {
+        if let duplicateIndex = duplicateIndex(for: incoming, in: list) {
+            let existing = list[duplicateIndex]
+            let preferExistingDetails = existing.source == .photo && incoming.source == .text
+            let mergedSource: HistorySource = (existing.source == .photo || incoming.source == .photo) ? .photo : .text
+            let mergedScans = (existing.scans + incoming.scans).sorted { $0.date > $1.date }
+            let merged = HistoryEntry(
+                id: existing.id,
+                date: max(existing.date, incoming.date),
+                item: preferExistingDetails ? existing.item : incoming.item,
+                material: preferExistingDetails ? existing.material : incoming.material,
+                recyclable: preferExistingDetails ? existing.recyclable : incoming.recyclable,
+                bin: preferExistingDetails ? existing.bin : incoming.bin,
+                notes: preferExistingDetails ? existing.notes : incoming.notes,
+                disposalLocation: preferExistingDetails ? existing.disposalLocation : incoming.disposalLocation,
+                carbonSavedKg: max(existing.carbonSavedKg, incoming.carbonSavedKg),
+                recycleStatus: mergedStatus(existing: existing.recycleStatus, incoming: incoming.recycleStatus),
+                rawJSON: preferExistingDetails ? existing.rawJSON : (incoming.rawJSON.isEmpty ? existing.rawJSON : incoming.rawJSON),
+                source: mergedSource,
+                localImagePath: existing.localImagePath ?? incoming.localImagePath,
+                remoteImagePath: existing.remoteImagePath ?? incoming.remoteImagePath,
+                scanCount: max(1, existing.scanCount) + max(1, incoming.scanCount),
+                scans: mergedScans
+            )
+            list.remove(at: duplicateIndex)
+            list.insert(merged, at: 0)
+            return
+        }
+
+        list.insert(incoming, at: 0)
     }
 
     private func duplicateIndex(for result: AIRecyclingResult) -> Int? {
@@ -627,6 +915,28 @@ final class HistoryStore: ObservableObject {
                existingMaterial != newMaterial {
                 let overlap = existingTokens.intersection(newTokens).count
                 // Keep duplicates merged when item naming is clearly the same.
+                if overlap < 2 {
+                    continue
+                }
+            }
+            return index
+        }
+        return nil
+    }
+
+    private func duplicateIndex(for candidate: HistoryEntry, in list: [HistoryEntry]) -> Int? {
+        let newTokens = ImpactKey.similarityTokenSet(item: candidate.item, material: candidate.material)
+        let newMaterial = ImpactKey.normalizedMaterial(candidate.material)
+
+        for (index, entry) in list.enumerated() {
+            let existingTokens = ImpactKey.similarityTokenSet(item: entry.item, material: entry.material)
+            guard ImpactKey.areSimilarTokens(existingTokens, newTokens) else { continue }
+
+            let existingMaterial = ImpactKey.normalizedMaterial(entry.material)
+            if existingMaterial != "unknown",
+               newMaterial != "unknown",
+               existingMaterial != newMaterial {
+                let overlap = existingTokens.intersection(newTokens).count
                 if overlap < 2 {
                     continue
                 }

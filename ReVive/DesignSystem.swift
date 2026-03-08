@@ -65,6 +65,43 @@ enum AppType {
     }
 }
 
+enum AppLayout {
+    static func pageHorizontalPadding(for width: CGFloat) -> CGFloat {
+        switch width {
+        case ..<700:
+            return 24
+        case ..<1000:
+            return 32
+        case ..<1300:
+            return 44
+        default:
+            return 56
+        }
+    }
+
+    static func pageTopPadding(for width: CGFloat) -> CGFloat {
+        width >= 700 ? 30 : 24
+    }
+
+    static func pageBottomPadding(for width: CGFloat) -> CGFloat {
+        width >= 700 ? 136 : 120
+    }
+
+    static func pageContentMaxWidth(for width: CGFloat) -> CGFloat {
+        switch width {
+        case ..<700:
+            return width
+        case ..<1000:
+            return 760
+        case ..<1300:
+            return 920
+        default:
+            return 980
+        }
+    }
+
+}
+
 extension View {
     // NOTE: Static card background to avoid flashing when views recompose during scroll/toggle updates.
     func staticCard(cornerRadius: CGFloat = 20) -> some View {
@@ -101,5 +138,11 @@ extension View {
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
                 interactive: interactive
             )
+    }
+
+    func adaptivePageFrame(width: CGFloat, alignment: Alignment = .leading) -> some View {
+        self
+            .frame(maxWidth: AppLayout.pageContentMaxWidth(for: width), alignment: alignment)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 }

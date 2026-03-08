@@ -15,6 +15,7 @@ struct ReViveApp: App {
     @StateObject private var historyStore = HistoryStore()
     @StateObject private var authStore = AuthStore()
     @StateObject private var configStore = AppConfigStore()
+    @StateObject private var leaderboardStore = LeaderboardStore()
 
     var body: some Scene {
         WindowGroup {
@@ -22,7 +23,7 @@ struct ReViveApp: App {
                 .environmentObject(historyStore)
                 .environmentObject(authStore)
                 .environmentObject(configStore)
-                .preferredColorScheme(authStore.preferredColorScheme)
+                .environmentObject(leaderboardStore)
                 .task {
                     await configStore.load()
                     authStore.applyConfigIfAvailable()
