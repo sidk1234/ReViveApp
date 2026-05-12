@@ -13,6 +13,11 @@ struct LeaderboardView: View {
     @State private var hasRequestedInitialLoad = false
     @State private var hasCompletedInitialLoad = false
     @State private var contentOpacity: Double = 0
+    @State private var showOptInToast = false
+    @State private var showOptOutConfirmNote = false
+
+    @AppStorage("revive.leaderboard.hasSeenOptIn") private var hasSeenOptIn: Bool = false
+    @AppStorage("revive.leaderboard.optedIn") private var optedIn: Bool = true
 
     var body: some View {
         ZStack {
@@ -21,13 +26,65 @@ struct LeaderboardView: View {
 
             GeometryReader { pageGeo in
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Leaderboard")
-                        .font(AppType.display(30))
-                        .foregroundStyle(.primary)
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Leaderboard")
+                                .font(AppType.display(30))
+                                .foregroundStyle(.primary)
 
-                    Text("Top recyclers ranked by total CO2e saved.")
-                        .font(AppType.body(16))
-                        .foregroundStyle(.primary.opacity(0.7))
+                            Text("Top recyclers ranked by total CO2e saved.")
+                                .font(AppType.body(16))
+                                .foregroundStyle(.primary.opacity(0.7))
+                        }
+
+                        Spacer()
+
+                        if auth.isSignedIn {
+                            Button {
+                                toggleOptIn()
+                            } label: {
+                                VStack(spacing: 3) {
+                                    Image(systemName: optedIn ? "trophy.fill" : "trophy")
+                                        .font(.system(size: 20, weight: .semibold))
+                                        .foregroundStyle(optedIn ? AppTheme.mint : .primary.opacity(0.45))
+                                    Text(optedIn ? "Ranked" : "Hidden")
+                                        .font(AppType.body(10))
+                                        .foregroundStyle(optedIn ? AppTheme.mint : .primary.opacity(0.45))
+                                }
+                                .frame(width: 52, height: 52)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
+                        }
+                    }
+
+                    if showOptOutConfirmNote {
+                        HStack(spacing: 8) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("You can rejoin anytime using the trophy toggle above.")
+                                .font(AppType.body(13))
+                        }
+                        .foregroundStyle(.primary.opacity(0.75))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .staticCard(cornerRadius: 14)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                    }
+
+                    if !optedIn && auth.isSignedIn {
+                        HStack(spacing: 10) {
+                            Image(systemName: "eye.slash")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.primary.opacity(0.6))
+                            Text("You are not on the leaderboard.")
+                                .font(AppType.body(13))
+                                .foregroundStyle(.primary.opacity(0.7))
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .staticCard(cornerRadius: 14)
+                    }
 
                     LeaderboardAccountRow(onGoToAccount: onGoToAccount)
 
@@ -54,6 +111,31 @@ struct LeaderboardView: View {
                 .padding(.bottom, 0)
                 .adaptivePageFrame(width: pageGeo.size.width)
             }
+
+            if showOptInToast {
+                LeaderboardOptInOverlay(
+                    onJoin: {
+                        withAnimation(.easeInOut(duration: 0.2)) { showOptInToast = false }
+                        optedIn = true
+                        Task { await auth.updateLeaderboardVisibility(true) }
+                    },
+                    onDecline: {
+                        withAnimation(.easeInOut(duration: 0.2)) { showOptInToast = false }
+                        optedIn = false
+                        Task { await auth.updateLeaderboardVisibility(false) }
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                            showOptOutConfirmNote = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                showOptOutConfirmNote = false
+                            }
+                        }
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(10)
+            }
         }
         .ignoresSafeArea(.container, edges: .bottom)
         .onAppear {
@@ -63,6 +145,14 @@ struct LeaderboardView: View {
             hasRequestedInitialLoad = true
             if isInitialLoadReadyForReveal {
                 revealInitialContentIfNeeded(animated: false)
+            }
+            if auth.isSignedIn && !hasSeenOptIn {
+                hasSeenOptIn = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showOptInToast = true
+                    }
+                }
             }
         }
         .onChange(of: isInitialLoadReadyForReveal) { _, isReady in
@@ -77,7 +167,7 @@ struct LeaderboardView: View {
             Text(error)
                 .font(AppType.body(13))
                 .foregroundStyle(.primary.opacity(0.7))
-        } else if store.entries.isEmpty {
+        } else if visibleEntries.isEmpty && store.hasLoadedAtLeastOnce {
             VStack {
                 Spacer()
                 VStack(spacing: 12) {
@@ -100,8 +190,12 @@ struct LeaderboardView: View {
             ZStack(alignment: .topTrailing) {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 12) {
-                        ForEach(Array(store.entries.enumerated()), id: \.element.id) { index, entry in
-                            LeaderboardRow(rank: index + 1, entry: entry)
+                        ForEach(Array(visibleEntries.enumerated()), id: \.element.id) { index, entry in
+                            LeaderboardRow(
+                                rank: index + 1,
+                                entry: entry,
+                                isCurrentUser: entry.userId == auth.user?.id
+                            )
                         }
                     }
                     .padding(.top, 4)
@@ -114,6 +208,29 @@ struct LeaderboardView: View {
                         .background(Circle().fill(.ultraThinMaterial))
                         .padding(.top, 4)
                 }
+            }
+        }
+    }
+
+    private var visibleEntries: [LeaderboardEntry] {
+        guard auth.isSignedIn, !optedIn, let userID = auth.user?.id else {
+            return store.entries
+        }
+        return store.entries.filter { $0.userId != userID }
+    }
+
+    private func toggleOptIn() {
+        let newValue = !optedIn
+        withAnimation(.easeInOut(duration: 0.18)) {
+            optedIn = newValue
+        }
+        Task { await auth.updateLeaderboardVisibility(newValue) }
+        if !newValue {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                showOptOutConfirmNote = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                withAnimation(.easeOut(duration: 0.3)) { showOptOutConfirmNote = false }
             }
         }
     }
@@ -139,6 +256,69 @@ struct LeaderboardView: View {
     }
 }
 
+private struct LeaderboardOptInOverlay: View {
+    let onJoin: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: "trophy.fill")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(AppTheme.mint)
+                    Text("Join the Leaderboard?")
+                        .font(AppType.title(18))
+                        .foregroundStyle(.primary)
+                }
+
+                Text("Compete with other recyclers and show off your CO2e savings. You can opt out anytime.")
+                    .font(AppType.body(14))
+                    .foregroundStyle(.primary.opacity(0.8))
+
+                HStack(spacing: 10) {
+                    Button("No thanks") {
+                        onDecline()
+                    }
+                    .font(AppType.title(14))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                    )
+
+                    Button("Yes, join") {
+                        onJoin()
+                    }
+                    .font(AppType.title(14))
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .liquidGlassButton(
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous),
+                        tint: AppTheme.mint
+                    )
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: 360)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+            )
+        }
+    }
+}
+
 private struct LeaderboardLoadingPlaceholder: View {
     var body: some View {
         VStack(spacing: 10) {
@@ -158,6 +338,7 @@ private struct LeaderboardLoadingPlaceholder: View {
 private struct LeaderboardRow: View {
     let rank: Int
     let entry: LeaderboardEntry
+    var isCurrentUser: Bool = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -167,9 +348,21 @@ private struct LeaderboardRow: View {
                 .frame(width: 40, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.displayName ?? "Recycler")
-                    .font(AppType.title(16))
-                    .foregroundStyle(.primary)
+                HStack(spacing: 6) {
+                    Text(entry.displayName ?? "Recycler")
+                        .font(AppType.title(16))
+                        .foregroundStyle(.primary)
+                    if isCurrentUser {
+                        Text("You")
+                            .font(AppType.body(11))
+                            .foregroundStyle(AppTheme.mint)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule().fill(AppTheme.mint.opacity(0.15))
+                            )
+                    }
+                }
 
                 let scans = entry.totalScans ?? 0
                 let recycled = entry.recyclableCount ?? 0
@@ -191,6 +384,10 @@ private struct LeaderboardRow: View {
         }
         .padding(16)
         .staticCard(cornerRadius: 20)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(isCurrentUser ? AppTheme.mint.opacity(0.4) : Color.clear, lineWidth: 1.5)
+        )
     }
 
     private func formatCarbon(_ value: Double) -> String {

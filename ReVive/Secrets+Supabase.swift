@@ -15,6 +15,6 @@ extension Secrets {
     }
 
     static var supabaseRedirectScheme: String {
-        "recai"
+        "revive"
     }
 }

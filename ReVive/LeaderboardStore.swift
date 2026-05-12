@@ -15,7 +15,7 @@ final class LeaderboardStore: ObservableObject {
 
     private var passiveRefreshTask: Task<Void, Never>?
     private var currentAccessToken: String?
-    private let passiveRefreshIntervalNanoseconds: UInt64 = 45_000_000_000
+    private let passiveRefreshIntervalNanoseconds: UInt64 = 10_000_000_000
 
     private var supabase: SupabaseService? {
         SupabaseConfig.load().map(SupabaseService.init)

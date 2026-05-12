@@ -469,11 +469,14 @@ final class SupabaseService {
         return false
     }
 
-    func sendPasswordReset(email: String) async throws {
+    func sendPasswordReset(email: String, redirectURL: URL? = nil) async throws {
         let url = config.url.appendingPathComponent("auth/v1/recover")
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "email": email
         ]
+        if let redirectURL {
+            payload["redirect_to"] = redirectURL.absoluteString
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -797,6 +800,28 @@ final class SupabaseService {
             ["is_pro_subscriber": isActive],
             accessToken: accessToken
         )
+        // Also write directly to user_subscription_state so the edge function
+        // finds it on the first request without waiting for a JWT refresh.
+        try await upsertSubscriptionState(isActive: isActive, accessToken: accessToken)
+    }
+
+    private func upsertSubscriptionState(isActive: Bool, accessToken: String) async throws {
+        let url = config.url.appendingPathComponent("rest/v1/user_subscription_state")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
+        let body: [String: Any] = ["is_pro": isActive]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw ServiceError.httpError(http.statusCode, msg)
+        }
     }
 
     func fetchSubscriptionState(userId: String, accessToken: String) async throws -> Bool? {
@@ -1000,6 +1025,31 @@ final class SupabaseService {
         guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
         guard (200...299).contains(http.statusCode) else {
             throw ServiceError.httpError(http.statusCode, "Profile update failed")
+        }
+    }
+
+    func updateLeaderboardVisibility(id: String, visible: Bool, accessToken: String) async throws {
+        let url = config.url.appendingPathComponent("rest/v1/profiles")
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "id", value: "eq.\(id)")]
+        guard let requestURL = components?.url else { throw ServiceError.invalidCallback }
+
+        let payload: [String: Any] = [
+            "show_on_leaderboard": visible,
+            "updated_at": isoTimestamp(Date())
+        ]
+
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            throw ServiceError.httpError(http.statusCode, "Leaderboard visibility update failed")
         }
     }
 

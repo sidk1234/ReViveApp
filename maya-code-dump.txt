@@ -1,0 +1,2801 @@
+-----package.json-----
+{
+  "name": "maya-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@fontsource/fraunces": "^5.2.9",
+    "@fontsource/manrope": "^5.2.8",
+    "framer-motion": "^12.6.2",
+    "lucide-react": "^0.511.0",
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.2"
+  }
+}
+
+-----package.json-----
+
+-----next-env.d.ts-----
+/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+/// <reference path="./.next/types/routes.d.ts" />
+
+// NOTE: This file should not be edited
+// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+
+-----next-env.d.ts-----
+
+-----next.config.ts-----
+import path from "path";
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  outputFileTracingRoot: path.join(__dirname)
+};
+
+export default nextConfig;
+
+-----next.config.ts-----
+
+-----postcss.config.js-----
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {}
+  }
+};
+
+-----postcss.config.js-----
+
+-----tailwind.config.ts-----
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  content: [
+    "./app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./components/**/*.{js,ts,jsx,tsx,mdx}",
+    "./data/**/*.{js,ts,jsx,tsx,mdx}",
+    "./lib/**/*.{js,ts,jsx,tsx,mdx}"
+  ],
+  theme: {
+    extend: {
+      colors: {
+        ink: "#0f172a",
+        mist: "#eff4f9",
+        shell: "#f8f8f4"
+      },
+      boxShadow: {
+        ambient: "0 40px 120px rgba(70, 93, 140, 0.16)",
+        glass: "0 24px 80px rgba(15, 23, 42, 0.08)"
+      },
+      borderRadius: {
+        "4xl": "2rem",
+        "5xl": "2.5rem"
+      },
+      backgroundImage: {
+        "hero-grid":
+          "linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px)"
+      }
+    }
+  },
+  plugins: []
+};
+
+export default config;
+
+-----tailwind.config.ts-----
+
+-----tsconfig.json-----
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
+
+-----tsconfig.json-----
+
+-----app/layout.tsx-----
+import type { Metadata } from "next";
+import "@fontsource/manrope";
+import "@fontsource/fraunces";
+
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "maya",
+  description: "Interactive landing page and iPhone app prototype for maya, an AI conversation coach."
+};
+
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <html lang="en" className="scroll-smooth">
+      <body>
+        <script async src="https://mcp.figma.com/mcp/html-to-design/capture.js" />
+        {children}
+      </body>
+    </html>
+  );
+}
+
+-----app/layout.tsx-----
+
+-----app/page.tsx-----
+import { FeatureSection } from "@/components/sections/feature-section";
+import { FinalCtaSection } from "@/components/sections/final-cta-section";
+import { Footer } from "@/components/sections/footer";
+import { HeroSection } from "@/components/sections/hero-section";
+import { HowItWorksSection } from "@/components/sections/how-it-works-section";
+import { Navbar } from "@/components/sections/navbar";
+import { PricingSection } from "@/components/sections/pricing-section";
+import { ShowcaseSection } from "@/components/sections/showcase-section";
+
+export default function Home() {
+  return (
+    <main className="relative overflow-hidden">
+      <Navbar />
+      <HeroSection />
+      <FeatureSection />
+      <ShowcaseSection />
+      <HowItWorksSection />
+      <PricingSection />
+      <FinalCtaSection />
+      <Footer />
+    </main>
+  );
+}
+
+-----app/page.tsx-----
+
+-----app/globals.css-----
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f6f6f2;
+  --ink: #0f172a;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(94, 234, 212, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(167, 139, 250, 0.18), transparent 24%),
+    linear-gradient(180deg, #fbfbf8 0%, #f4f6fa 52%, #eef2f7 100%);
+  color: var(--ink);
+  font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+::selection {
+  background: rgba(125, 211, 252, 0.38);
+}
+
+@layer utilities {
+  .font-display {
+    font-family: "Fraunces", Georgia, serif;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .scrollbar-hidden {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+-----app/globals.css-----
+
+-----app/figma-iphone/page.tsx-----
+import { ConversationCoachDemo } from "@/components/phone/conversation-coach-demo";
+import { AppScreen, PracticeMode } from "@/lib/types";
+
+const validScreens: AppScreen[] = [
+  "onboarding",
+  "home",
+  "scenarios",
+  "setup",
+  "live",
+  "feedback",
+  "analytics",
+  "profile"
+];
+
+const validModes: PracticeMode[] = ["interview", "networking", "dating", "presentation"];
+
+function getRenderMode(value: string | undefined): "device" | "screen" {
+  if (value === "device") {
+    return "device";
+  }
+
+  return "screen";
+}
+
+function getScreen(value: string | undefined): AppScreen {
+  if (value && validScreens.includes(value as AppScreen)) {
+    return value as AppScreen;
+  }
+
+  return "onboarding";
+}
+
+function getMode(value: string | undefined): PracticeMode {
+  if (value && validModes.includes(value as PracticeMode)) {
+    return value as PracticeMode;
+  }
+
+  return "interview";
+}
+
+export default async function FigmaIphonePage({
+  searchParams
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const screen = getScreen(typeof params.screen === "string" ? params.screen : undefined);
+  const mode = getMode(typeof params.mode === "string" ? params.mode : undefined);
+  const renderMode = getRenderMode(typeof params.frame === "string" ? params.frame : undefined);
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.24),transparent_28%),radial-gradient(circle_at_top_right,rgba(167,139,250,0.18),transparent_24%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(247,248,252,0.88))] px-6 py-8">
+      <div
+        id="single-iphone-app"
+        className={renderMode === "screen" ? "w-full max-w-[402px]" : "w-full max-w-[420px]"}
+      >
+        <ConversationCoachDemo initialMode={mode} initialScreen={screen} renderMode={renderMode} />
+      </div>
+    </main>
+  );
+}
+
+-----app/figma-iphone/page.tsx-----
+
+-----components/ui/button.tsx-----
+import { ButtonHTMLAttributes } from "react";
+
+import { cn } from "@/lib/utils";
+
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "secondary" | "ghost";
+};
+
+export function buttonStyles(variant: ButtonProps["variant"] = "primary") {
+  if (variant === "secondary") {
+    return "inline-flex items-center justify-center rounded-full border border-white/60 bg-white/70 px-5 py-3 text-sm font-semibold text-slate-900 shadow-[0_20px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl transition duration-300 hover:-translate-y-0.5 hover:bg-white";
+  }
+
+  if (variant === "ghost") {
+    return "inline-flex items-center justify-center rounded-full border border-slate-300/70 bg-transparent px-5 py-3 text-sm font-semibold text-slate-700 transition duration-300 hover:-translate-y-0.5 hover:border-slate-400 hover:text-slate-950";
+  }
+
+  return "inline-flex items-center justify-center rounded-full border border-slate-900/10 bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-[0_20px_50px_rgba(15,23,42,0.18)] transition duration-300 hover:-translate-y-0.5 hover:bg-slate-800";
+}
+
+export function Button({ className, variant, ...props }: ButtonProps) {
+  return <button className={cn(buttonStyles(variant), className)} {...props} />;
+}
+
+-----components/ui/button.tsx-----
+
+-----components/ui/count-up.tsx-----
+"use client";
+
+import { useEffect, useState } from "react";
+import { animate } from "framer-motion";
+
+type CountUpProps = {
+  value: number;
+  suffix?: string;
+  decimals?: number;
+  className?: string;
+};
+
+export function CountUp({ value, suffix = "", decimals = 0, className }: CountUpProps) {
+  const [display, setDisplay] = useState(0);
+
+  useEffect(() => {
+    const controls = animate(0, value, {
+      duration: 1.1,
+      ease: [0.16, 1, 0.3, 1],
+      onUpdate(current) {
+        setDisplay(Number(current.toFixed(decimals)));
+      }
+    });
+
+    return () => controls.stop();
+  }, [decimals, value]);
+
+  return (
+    <span className={className}>
+      {display}
+      {suffix}
+    </span>
+  );
+}
+
+-----components/ui/count-up.tsx-----
+
+-----components/ui/glass-panel.tsx-----
+import { HTMLAttributes } from "react";
+
+import { cn } from "@/lib/utils";
+
+export function GlassPanel({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn(
+        "rounded-[32px] border border-white/60 bg-white/65 shadow-glass backdrop-blur-2xl",
+        className
+      )}
+      {...props}
+    />
+  );
+}
+
+-----components/ui/glass-panel.tsx-----
+
+-----components/phone/phone-shell.tsx-----
+import { ReactNode } from "react";
+
+import { cn } from "@/lib/utils";
+
+type PhoneShellProps = {
+  children: ReactNode;
+  className?: string;
+};
+
+export function PhoneShell({ children, className }: PhoneShellProps) {
+  return (
+    <div className={cn("relative mx-auto w-full max-w-[420px]", className)}>
+      <div className="absolute inset-0 -z-20 translate-y-10 rounded-full bg-[radial-gradient(circle_at_center,rgba(148,163,184,0.32),transparent_38%),radial-gradient(circle_at_bottom,rgba(56,189,248,0.18),transparent_44%)] blur-3xl" />
+      <div className="absolute -left-[3px] top-36 h-20 w-[3px] rounded-full bg-[linear-gradient(180deg,#d4d4d8,#a1a1aa,#f4f4f5)] shadow-[0_0_12px_rgba(255,255,255,0.6)]" />
+      <div className="absolute -left-[3px] top-60 h-12 w-[3px] rounded-full bg-[linear-gradient(180deg,#d4d4d8,#a1a1aa,#f4f4f5)] shadow-[0_0_12px_rgba(255,255,255,0.6)]" />
+      <div className="absolute -right-[3px] top-40 h-24 w-[3px] rounded-full bg-[linear-gradient(180deg,#d4d4d8,#a1a1aa,#f4f4f5)] shadow-[0_0_12px_rgba(255,255,255,0.55)]" />
+      <div className="relative aspect-[402/874] rounded-[52px] bg-[linear-gradient(135deg,#f8fafc_0%,#d4d4d8_18%,#7c7f85_45%,#f5f5f5_72%,#52525b_100%)] p-[4px] shadow-[0_40px_140px_rgba(15,23,42,0.24)]">
+        <div className="relative h-full rounded-[48px] bg-[linear-gradient(180deg,#f5f5f5_0%,#71717a_16%,#f8fafc_34%,#3f3f46_100%)] p-[3px]">
+          <div className="relative h-full overflow-hidden rounded-[45px] border border-black/70 bg-black p-[6px]">
+            <div className="relative h-full overflow-hidden rounded-[40px] bg-[#f7f9fc]">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),transparent_52%),linear-gradient(180deg,rgba(255,255,255,0.68),rgba(241,245,249,0.94))]" />
+              <div className="absolute inset-0 bg-[linear-gradient(118deg,transparent_10%,rgba(255,255,255,0.24)_26%,transparent_42%)] opacity-60" />
+              <div className="absolute left-1/2 top-3 z-30 h-8 w-28 -translate-x-1/2 rounded-full bg-black shadow-[0_0_0_1px_rgba(255,255,255,0.04)]" />
+              <div className="absolute left-1/2 top-[18px] z-40 h-2 w-11 -translate-x-1/2 rounded-full bg-zinc-900" />
+              <div className="absolute left-[calc(50%+22px)] top-[17px] z-40 h-2.5 w-2.5 rounded-full bg-[radial-gradient(circle_at_30%_30%,#1d4ed8,#020617_68%)]" />
+              <div className="absolute inset-y-0 right-0 z-20 w-20 bg-[linear-gradient(100deg,transparent,rgba(255,255,255,0.16),transparent)] opacity-80" />
+              {children}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+-----components/phone/phone-shell.tsx-----
+
+-----components/phone/conversation-coach-demo.tsx-----
+"use client";
+
+import { startTransition, useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  BarChart3,
+  Bell,
+  Briefcase,
+  ChevronLeft,
+  ChevronRight,
+  Flame,
+  Heart,
+  Home,
+  Lightbulb,
+  MessageSquare,
+  Mic,
+  Presentation,
+  Sparkles,
+  Square,
+  Target,
+  TrendingUp,
+  UserRound,
+  Users,
+  WandSparkles
+} from "lucide-react";
+
+import { PhoneShell } from "@/components/phone/phone-shell";
+import { CountUp } from "@/components/ui/count-up";
+import { practiceScenarios, scenarioModes, onboardingSlides } from "@/data/conversation-coach";
+import { AppScreen, PracticeMode } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+type DemoProps = {
+  initialMode?: PracticeMode;
+  initialScreen?: AppScreen;
+  onStateChange?: (state: { mode: PracticeMode; screen: AppScreen }) => void;
+  className?: string;
+  renderMode?: "device" | "screen";
+};
+
+type Message = {
+  speaker: "ai" | "user";
+  text: string;
+};
+
+type ThemePreference = "Light" | "Dark" | "Auto";
+
+const modeIconMap: Record<PracticeMode, typeof Briefcase> = {
+  interview: Briefcase,
+  networking: Users,
+  dating: Heart,
+  presentation: Presentation
+};
+
+const modeSurfaceMap: Record<PracticeMode, string> = {
+  interview: "from-sky-500/20 to-cyan-300/15",
+  networking: "from-violet-500/20 to-sky-300/15",
+  dating: "from-rose-500/20 to-orange-300/15",
+  presentation: "from-teal-500/20 to-sky-300/15"
+};
+
+const metricToneMap: Record<string, string> = {
+  sky: "bg-sky-50 text-sky-700",
+  emerald: "bg-emerald-50 text-emerald-700",
+  violet: "bg-violet-50 text-violet-700",
+  amber: "bg-amber-50 text-amber-700",
+  rose: "bg-rose-50 text-rose-700",
+  teal: "bg-teal-50 text-teal-700"
+};
+
+const screenVariants = {
+  initial: { opacity: 0, y: 18, scale: 0.98 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: -16, scale: 0.985 }
+};
+
+const weeklyPractice = [2, 4, 5, 3, 6, 7, 5];
+const skillTrend = [72, 76, 79, 84, 82, 89, 93];
+
+export function ConversationCoachDemo({
+  initialMode = "interview",
+  initialScreen = "home",
+  onStateChange,
+  className,
+  renderMode = "device"
+}: DemoProps) {
+  const [mode, setMode] = useState<PracticeMode>(initialMode);
+  const [screen, setScreen] = useState<AppScreen>(initialScreen);
+  const [onboardingIndex, setOnboardingIndex] = useState(0);
+  const [personaId, setPersonaId] = useState(practiceScenarios[initialMode].personas[0]?.id ?? "");
+  const [difficulty, setDifficulty] = useState(practiceScenarios[initialMode].difficulties[1] ?? "");
+  const [goal, setGoal] = useState(practiceScenarios[initialMode].goals[0] ?? "");
+  const [revealedTurns, setRevealedTurns] = useState(initialScreen === "live" ? 1 : 0);
+  const [hintOpen, setHintOpen] = useState(false);
+  const [typedMode, setTypedMode] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [theme, setTheme] = useState<ThemePreference>("Auto");
+
+  const scenario = practiceScenarios[mode];
+  const currentPersona = scenario.personas.find((item) => item.id === personaId) ?? scenario.personas[0];
+  const currentReaction =
+    revealedTurns === 0
+      ? "Listening"
+      : scenario.transcript[Math.min(revealedTurns - 1, scenario.transcript.length - 1)]?.reaction ?? "Listening";
+  const currentHint =
+    scenario.transcript[Math.min(revealedTurns, scenario.transcript.length - 1)]?.hint ??
+    scenario.transcript[scenario.transcript.length - 1]?.hint ??
+    "";
+  const progress = Math.round((revealedTurns / scenario.transcript.length) * 100);
+  const messages: Message[] = [
+    { speaker: "ai", text: scenario.opening },
+    ...scenario.transcript.slice(0, revealedTurns).flatMap((turn) => [
+      { speaker: "user" as const, text: turn.user },
+      { speaker: "ai" as const, text: turn.ai }
+    ])
+  ];
+
+  useEffect(() => {
+    startTransition(() => {
+      setMode(initialMode);
+    });
+  }, [initialMode]);
+
+  useEffect(() => {
+    startTransition(() => {
+      setScreen(initialScreen);
+    });
+    setRevealedTurns(initialScreen === "live" ? 1 : 0);
+  }, [initialScreen]);
+
+  useEffect(() => {
+    setPersonaId(scenario.personas[0]?.id ?? "");
+    setDifficulty(scenario.difficulties[1] ?? scenario.difficulties[0] ?? "");
+    setGoal(scenario.goals[0] ?? "");
+    setRevealedTurns(0);
+    setHintOpen(false);
+    setTypedMode(false);
+  }, [mode, scenario.difficulties, scenario.goals, scenario.personas]);
+
+  useEffect(() => {
+    onStateChange?.({ mode, screen });
+  }, [mode, onStateChange, screen]);
+
+  function navigate(nextScreen: AppScreen) {
+    startTransition(() => {
+      setScreen(nextScreen);
+    });
+  }
+
+  function handleModeSelect(nextMode: PracticeMode, nextScreen: AppScreen = "setup") {
+    startTransition(() => {
+      setMode(nextMode);
+      setScreen(nextScreen);
+    });
+  }
+
+  function handleStartSession() {
+    setRevealedTurns(0);
+    setHintOpen(false);
+    setTypedMode(false);
+    navigate("live");
+  }
+
+  function handleNextResponse() {
+    if (revealedTurns >= scenario.transcript.length) {
+      navigate("feedback");
+      return;
+    }
+
+    setRevealedTurns((current) => current + 1);
+  }
+
+  const showTabBar = screen === "home" || screen === "scenarios" || screen === "analytics" || screen === "profile";
+
+  const appChrome = (
+    <div className="relative flex h-full flex-col px-4 pb-4 pt-12">
+        <div className="mb-4 flex items-center justify-between px-1 text-[11px] font-semibold tracking-[0.18em] text-slate-500">
+          <span>9:41</span>
+          <div className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-slate-900/70" />
+            <span className="h-2 w-2 rounded-full bg-slate-900/60" />
+            <span className="h-2 w-8 rounded-full bg-slate-900/80" />
+          </div>
+        </div>
+        <div className="relative flex-1 overflow-hidden">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={`${screen}-${mode}`}
+              variants={screenVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+              className="h-full"
+            >
+              {screen === "onboarding" ? (
+                <OnboardingScreen
+                  onboardingIndex={onboardingIndex}
+                  onAdvance={() =>
+                    setOnboardingIndex((current) => Math.min(current + 1, onboardingSlides.length - 1))
+                  }
+                  onRetreat={() => setOnboardingIndex((current) => Math.max(current - 1, 0))}
+                  onStart={() => navigate("home")}
+                />
+              ) : null}
+              {screen === "home" ? (
+                <HomeScreen
+                  mode={mode}
+                  progressScore={scenario.feedback.overallScore}
+                  onSelectMode={(nextMode) => handleModeSelect(nextMode)}
+                  onOpenScenarios={() => navigate("scenarios")}
+                  onOpenAnalytics={() => navigate("analytics")}
+                />
+              ) : null}
+              {screen === "scenarios" ? (
+                <ScenarioSelectionScreen
+                  activeMode={mode}
+                  onSelectMode={(nextMode) => handleModeSelect(nextMode)}
+                />
+              ) : null}
+              {screen === "setup" ? (
+                <SessionSetupScreen
+                  mode={mode}
+                  personaId={personaId}
+                  difficulty={difficulty}
+                  goal={goal}
+                  onBack={() => navigate("scenarios")}
+                  onModeSelect={(nextMode) => setMode(nextMode)}
+                  onPersonaSelect={setPersonaId}
+                  onDifficultySelect={setDifficulty}
+                  onGoalSelect={setGoal}
+                  onStartSession={handleStartSession}
+                />
+              ) : null}
+              {screen === "live" ? (
+                <LiveSessionScreen
+                  mode={mode}
+                  personaName={currentPersona?.name ?? "Coach"}
+                  personaRole={currentPersona?.role ?? "AI Persona"}
+                  personaFocus={currentPersona?.focus ?? ""}
+                  context={scenario.context}
+                  messages={messages}
+                  progress={progress}
+                  hint={currentHint}
+                  hintOpen={hintOpen}
+                  typedMode={typedMode}
+                  reaction={currentReaction}
+                  isComplete={revealedTurns >= scenario.transcript.length}
+                  onBack={() => navigate("setup")}
+                  onToggleHint={() => setHintOpen((current) => !current)}
+                  onToggleTypedMode={() => setTypedMode((current) => !current)}
+                  onNextResponse={handleNextResponse}
+                  onEndSession={() => navigate("feedback")}
+                />
+              ) : null}
+              {screen === "feedback" ? (
+                <FeedbackScreen
+                  mode={mode}
+                  onPracticeAgain={handleStartSession}
+                  onOpenAnalytics={() => navigate("analytics")}
+                  onBack={() => navigate("live")}
+                />
+              ) : null}
+              {screen === "analytics" ? <AnalyticsScreen mode={mode} theme={theme} /> : null}
+              {screen === "profile" ? (
+                <ProfileScreen
+                  mode={mode}
+                  notificationsEnabled={notificationsEnabled}
+                  voiceEnabled={voiceEnabled}
+                  theme={theme}
+                  onToggleNotifications={() => setNotificationsEnabled((current) => !current)}
+                  onToggleVoice={() => setVoiceEnabled((current) => !current)}
+                  onThemeChange={setTheme}
+                  onModeSelect={setMode}
+                />
+              ) : null}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+        {showTabBar ? (
+          <TabBar currentScreen={screen} onNavigate={navigate} />
+        ) : (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.82))]" />
+        )}
+      </div>
+  );
+
+  if (renderMode === "screen") {
+    return (
+      <div
+        className={cn(
+          "relative mx-auto aspect-[402/874] w-full max-w-[402px] overflow-hidden bg-[#f7f9fc]",
+          className
+        )}
+      >
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.9),transparent_50%),linear-gradient(180deg,rgba(255,255,255,0.65),rgba(241,245,249,0.92))]" />
+        {appChrome}
+      </div>
+    );
+  }
+
+  return (
+    <PhoneShell className={className}>
+      {appChrome}
+    </PhoneShell>
+  );
+}
+
+function OnboardingScreen({
+  onboardingIndex,
+  onAdvance,
+  onRetreat,
+  onStart
+}: {
+  onboardingIndex: number;
+  onAdvance: () => void;
+  onRetreat: () => void;
+  onStart: () => void;
+}) {
+  const slide = onboardingSlides[onboardingIndex];
+
+  return (
+    <div className="flex h-full flex-col justify-between pb-4">
+      <div>
+        <div className="rounded-[30px] border border-white/70 bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(37,99,235,0.88),rgba(139,92,246,0.82))] p-6 text-white shadow-[0_24px_70px_rgba(15,23,42,0.18)]">
+          <div className="flex h-14 w-14 items-center justify-center rounded-[18px] border border-white/15 bg-white/10 backdrop-blur-xl">
+            <WandSparkles className="h-6 w-6" />
+          </div>
+          <p className="mt-5 text-sm uppercase tracking-[0.24em] text-white/70">maya</p>
+          <h3 className="mt-3 text-3xl font-semibold leading-tight tracking-[-0.04em]">
+            Practice conversations before they matter.
+          </h3>
+          <p className="mt-4 max-w-xs text-sm leading-6 text-white/75">
+            A premium rehearsal app for interviews, networking, dating, and presentations.
+          </p>
+        </div>
+        <div className="mt-4 rounded-[30px] border border-white/70 bg-white/82 p-5 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={slide.title}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.28 }}
+            >
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">{slide.eyebrow}</p>
+              <h4 className="mt-4 text-2xl font-semibold leading-snug tracking-[-0.03em] text-slate-950">
+                {slide.title}
+              </h4>
+              <p className="mt-3 text-sm leading-6 text-slate-600">{slide.body}</p>
+            </motion.div>
+          </AnimatePresence>
+          <div className="mt-5 flex items-center justify-between">
+            <div className="flex gap-2">
+              {onboardingSlides.map((item, index) => (
+                <span
+                  key={item.title}
+                  className={cn(
+                    "h-2 rounded-full transition-all",
+                    index === onboardingIndex ? "w-8 bg-slate-900" : "w-2 bg-slate-300"
+                  )}
+                />
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={onRetreat}
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-white"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                onClick={onAdvance}
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-white"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-3">
+        <button
+          onClick={onStart}
+          className="w-full rounded-full bg-slate-950 px-5 py-4 text-sm font-semibold text-white shadow-[0_20px_45px_rgba(15,23,42,0.2)] transition hover:bg-slate-800"
+        >
+          Get Started
+        </button>
+        <button className="w-full rounded-full border border-slate-200/80 bg-white/70 px-5 py-4 text-sm font-medium text-slate-600">
+          Explore the prototype
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HomeScreen({
+  mode,
+  progressScore,
+  onSelectMode,
+  onOpenScenarios,
+  onOpenAnalytics
+}: {
+  mode: PracticeMode;
+  progressScore: number;
+  onSelectMode: (mode: PracticeMode) => void;
+  onOpenScenarios: () => void;
+  onOpenAnalytics: () => void;
+}) {
+  return (
+    <div className="h-full overflow-y-auto pb-24 scrollbar-hidden">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Daily focus</p>
+          <h3 className="mt-2 text-[28px] font-semibold tracking-[-0.04em] text-slate-950">Good morning, Jordan.</h3>
+          <p className="mt-1 text-sm text-slate-600">Two sessions left to lock in your weekly goal.</p>
+        </div>
+        <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/80 shadow-[0_14px_36px_rgba(15,23,42,0.08)]">
+          <UserRound className="h-5 w-5 text-slate-900" />
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-[1.2fr_0.8fr] gap-3">
+        <div className="rounded-[28px] border border-white/70 bg-[linear-gradient(135deg,rgba(15,23,42,0.94),rgba(37,99,235,0.82),rgba(94,234,212,0.6))] p-5 text-white shadow-[0_24px_70px_rgba(15,23,42,0.16)]">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/70">
+            <Flame className="h-4 w-4" />
+            18 day streak
+          </div>
+          <p className="mt-5 text-3xl font-semibold tracking-[-0.04em]">12 min</p>
+          <p className="mt-1 text-sm text-white/75">Average daily practice this week</p>
+          <button
+            onClick={() => onSelectMode(mode)}
+            className="mt-6 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white backdrop-blur-md"
+          >
+            Continue practicing
+          </button>
+        </div>
+        <div className="rounded-[28px] border border-white/70 bg-white/80 p-4 shadow-[0_18px_60px_rgba(15,23,42,0.07)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Skill score</p>
+          <div className="mt-4 flex justify-center">
+            <ScoreRing value={progressScore} size={96} strokeWidth={9} />
+          </div>
+          <button onClick={onOpenAnalytics} className="mt-4 w-full rounded-full bg-slate-100 px-3 py-2 text-xs font-medium text-slate-700">
+            View analytics
+          </button>
+        </div>
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Continue where you left off</p>
+            <h4 className="mt-2 text-lg font-semibold text-slate-950">{practiceScenarios[mode].title}</h4>
+          </div>
+          <button
+            onClick={onOpenScenarios}
+            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600"
+          >
+            Switch
+          </button>
+        </div>
+        <p className="mt-2 text-sm leading-6 text-slate-600">{practiceScenarios[mode].description}</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {practiceScenarios[mode].tags.map((tag) => (
+            <span key={tag} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+              {tag}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-900">Quick actions</p>
+          <button onClick={onOpenScenarios} className="text-xs font-medium text-slate-500">
+            See all
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {scenarioModes.map((item) => {
+            const Icon = modeIconMap[item];
+
+            return (
+              <button
+                key={item}
+                onClick={() => onSelectMode(item)}
+                className={`rounded-[24px] border border-white/70 bg-[linear-gradient(160deg,rgba(255,255,255,0.95),rgba(255,255,255,0.62)),linear-gradient(135deg,var(--tw-gradient-stops))] p-4 text-left shadow-[0_18px_50px_rgba(15,23,42,0.05)] ${modeSurfaceMap[item]}`}
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/70 bg-white/85">
+                  <Icon className="h-4 w-4 text-slate-900" />
+                </div>
+                <p className="mt-4 text-sm font-semibold text-slate-950">{practiceScenarios[item].shortTitle}</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">{practiceScenarios[item].summary}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-900">Recent session</p>
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">+9 this week</span>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <MiniStat label="Warmth" value="91" />
+          <MiniStat label="Clarity" value="88" />
+          <MiniStat label="Pacing" value="126" suffix=" wpm" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScenarioSelectionScreen({
+  activeMode,
+  onSelectMode
+}: {
+  activeMode: PracticeMode;
+  onSelectMode: (mode: PracticeMode) => void;
+}) {
+  return (
+    <div className="h-full overflow-y-auto pb-24 scrollbar-hidden">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Scenario Selection</p>
+      <h3 className="mt-2 text-[28px] font-semibold tracking-[-0.04em] text-slate-950">Choose your practice room.</h3>
+      <p className="mt-2 text-sm leading-6 text-slate-600">
+        Each mode adapts the persona, pressure, and feedback language to the moment you are preparing for.
+      </p>
+      <div className="mt-5 space-y-3">
+        {scenarioModes.map((item) => {
+          const scenario = practiceScenarios[item];
+          const Icon = modeIconMap[item];
+          const active = item === activeMode;
+          const isPresentation = item === "presentation";
+          const title = isPresentation ? scenario.shortTitle : scenario.title;
+          const description = isPresentation ? scenario.summary : scenario.description;
+          const cardClassName = isPresentation
+            ? active
+              ? "border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(241,245,249,0.92))] text-slate-950 shadow-[0_24px_60px_rgba(15,23,42,0.08)]"
+              : "border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] text-slate-950 shadow-[0_18px_50px_rgba(15,23,42,0.05)]"
+            : active
+              ? "border-slate-900/10 bg-slate-950 text-white shadow-[0_24px_60px_rgba(15,23,42,0.16)]"
+              : `border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(255,255,255,0.68)),linear-gradient(135deg,var(--tw-gradient-stops))] shadow-[0_18px_50px_rgba(15,23,42,0.06)] ${modeSurfaceMap[item]}`;
+          const iconClassName = isPresentation
+            ? "border border-white/70 bg-white/78 text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"
+            : active
+              ? "bg-white/10"
+              : "border border-white/70 bg-white/82";
+          const descriptionClassName = isPresentation
+            ? "text-slate-600"
+            : active
+              ? "text-white/70"
+              : "text-slate-600";
+          const chevronClassName = isPresentation
+            ? "text-slate-400"
+            : active
+              ? "text-white/70"
+              : "text-slate-400";
+          const tagClassName = isPresentation
+            ? "border border-slate-200/80 bg-white/80 text-slate-600"
+            : active
+              ? "bg-white/10 text-white/75"
+              : "bg-slate-100 text-slate-600";
+
+          return (
+            <button
+              key={item}
+              onClick={() => onSelectMode(item)}
+              className={`w-full rounded-[28px] border p-5 text-left transition ${cardClassName}`}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${iconClassName}`}>
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-lg font-semibold">{title}</p>
+                    <p className={`mt-1 text-sm leading-6 ${descriptionClassName}`}>{description}</p>
+                  </div>
+                </div>
+                <ChevronRight className={`mt-1 h-5 w-5 ${chevronClassName}`} />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {scenario.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${tagClassName}`}
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SessionSetupScreen({
+  mode,
+  personaId,
+  difficulty,
+  goal,
+  onBack,
+  onModeSelect,
+  onPersonaSelect,
+  onDifficultySelect,
+  onGoalSelect,
+  onStartSession
+}: {
+  mode: PracticeMode;
+  personaId: string;
+  difficulty: string;
+  goal: string;
+  onBack: () => void;
+  onModeSelect: (mode: PracticeMode) => void;
+  onPersonaSelect: (value: string) => void;
+  onDifficultySelect: (value: string) => void;
+  onGoalSelect: (value: string) => void;
+  onStartSession: () => void;
+}) {
+  const scenario = practiceScenarios[mode];
+
+  return (
+    <div className="h-full overflow-y-auto pb-8 scrollbar-hidden">
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white/70 text-slate-600"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="rounded-full border border-white/70 bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          Session Setup
+        </div>
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(255,255,255,0.68)),linear-gradient(135deg,var(--tw-gradient-stops))] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Selected scenario</p>
+        <h3 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-slate-950">{scenario.title}</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-600">{scenario.context}</p>
+        <p className="mt-4 text-sm font-medium text-slate-900">{scenario.stat}</p>
+      </div>
+      <div className="mt-4 space-y-5">
+        <SetupSectionTitle title="Scenario type" subtitle="Switch the rehearsal room instantly." />
+        <div className="flex flex-wrap gap-2">
+          {scenarioModes.map((item) => (
+            <button
+              key={item}
+              onClick={() => onModeSelect(item)}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                item === mode ? "bg-slate-950 text-white" : "border border-slate-200 bg-white/75 text-slate-600"
+              }`}
+            >
+              {practiceScenarios[item].shortTitle}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-5 space-y-3">
+        <SetupSectionTitle title="AI persona" subtitle="Pick who you want to practice against." />
+        {scenario.personas.map((persona) => (
+          <button
+            key={persona.id}
+            onClick={() => onPersonaSelect(persona.id)}
+            className={`w-full rounded-[24px] border p-4 text-left transition ${
+              persona.id === personaId
+                ? "border-slate-900/10 bg-slate-950 text-white shadow-[0_20px_40px_rgba(15,23,42,0.16)]"
+                : "border-white/70 bg-white/82 text-slate-900 shadow-[0_14px_34px_rgba(15,23,42,0.05)]"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-semibold">{persona.name}</p>
+                <p className={`mt-1 text-sm ${persona.id === personaId ? "text-white/70" : "text-slate-600"}`}>{persona.role}</p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${persona.id === personaId ? "bg-white/10" : "bg-slate-100 text-slate-600"}`}>
+                {persona.focus}
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+      <div className="mt-5">
+        <SetupSectionTitle title="Difficulty" subtitle="Adjust pressure and realism." />
+        <div className="mt-3 flex rounded-full border border-slate-200 bg-white/70 p-1">
+          {scenario.difficulties.map((item) => (
+            <button
+              key={item}
+              onClick={() => onDifficultySelect(item)}
+              className={`flex-1 rounded-full px-3 py-2 text-sm font-medium transition ${
+                item === difficulty ? "bg-slate-950 text-white shadow-[0_10px_20px_rgba(15,23,42,0.12)]" : "text-slate-500"
+              }`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-5">
+        <SetupSectionTitle title="Conversation goal" subtitle="Choose the outcome you want to optimize for." />
+        <div className="mt-3 flex flex-wrap gap-2">
+          {scenario.goals.map((item) => (
+            <button
+              key={item}
+              onClick={() => onGoalSelect(item)}
+              className={`rounded-full px-4 py-2 text-sm transition ${
+                item === goal ? "bg-slate-950 text-white" : "border border-slate-200 bg-white/75 text-slate-600"
+              }`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </div>
+      <button
+        onClick={onStartSession}
+        className="mt-6 w-full rounded-full bg-slate-950 px-5 py-4 text-sm font-semibold text-white shadow-[0_20px_45px_rgba(15,23,42,0.18)] transition hover:bg-slate-800"
+      >
+        Start Practice Session
+      </button>
+    </div>
+  );
+}
+
+function LiveSessionScreen({
+  mode,
+  personaName,
+  personaRole,
+  personaFocus,
+  context,
+  messages,
+  progress,
+  hint,
+  hintOpen,
+  typedMode,
+  reaction,
+  isComplete,
+  onBack,
+  onToggleHint,
+  onToggleTypedMode,
+  onNextResponse,
+  onEndSession
+}: {
+  mode: PracticeMode;
+  personaName: string;
+  personaRole: string;
+  personaFocus: string;
+  context: string;
+  messages: Message[];
+  progress: number;
+  hint: string;
+  hintOpen: boolean;
+  typedMode: boolean;
+  reaction: string;
+  isComplete: boolean;
+  onBack: () => void;
+  onToggleHint: () => void;
+  onToggleTypedMode: () => void;
+  onNextResponse: () => void;
+  onEndSession: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white/70 text-slate-600"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="rounded-full border border-white/70 bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          Live Session
+        </div>
+      </div>
+      <div className={`mt-4 rounded-[28px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(255,255,255,0.7)),linear-gradient(135deg,var(--tw-gradient-stops))] p-4 shadow-[0_18px_50px_rgba(15,23,42,0.06)] ${modeSurfaceMap[mode]}`}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <SpeakingOrb />
+            <div>
+              <p className="text-sm font-semibold text-slate-950">{personaName}</p>
+              <p className="text-xs text-slate-500">{personaRole}</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-slate-950 px-3 py-1 text-xs font-semibold text-white">{reaction}</span>
+        </div>
+        <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Scenario context</p>
+        <p className="mt-1 text-sm leading-6 text-slate-600">{context}</p>
+        <p className="mt-3 text-xs text-slate-500">Persona focus: {personaFocus}</p>
+        <div className="mt-4 h-2 rounded-full bg-slate-200/80">
+          <motion.div
+            className="h-full rounded-full bg-slate-950"
+            initial={{ width: 0 }}
+            animate={{ width: `${Math.max(progress, 12)}%` }}
+            transition={{ duration: 0.45, ease: "easeOut" }}
+          />
+        </div>
+      </div>
+      <div className="relative mt-4 flex-1 overflow-hidden rounded-[28px] border border-white/70 bg-white/82 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+        <AnimatePresence>
+          {hintOpen ? (
+            <motion.div
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              className="absolute inset-x-3 top-3 z-20 rounded-[22px] border border-amber-200 bg-amber-50/95 p-4 shadow-[0_18px_40px_rgba(245,158,11,0.18)] backdrop-blur-xl"
+            >
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                  <Lightbulb className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Coach hint</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-700">{hint}</p>
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+        <div className="h-full overflow-y-auto p-3 pb-4 scrollbar-hidden">
+          <div className="space-y-3 pt-1">
+            <AnimatePresence initial={false}>
+              {messages.map((message) => (
+                <motion.div
+                  key={`${message.speaker}-${message.text}`}
+                  initial={{ opacity: 0, y: 14 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.24 }}
+                  className={cn("flex", message.speaker === "user" ? "justify-end" : "justify-start")}
+                >
+                  <div
+                    className={cn(
+                      "max-w-[82%] rounded-[22px] px-4 py-3 text-sm leading-6 shadow-[0_12px_30px_rgba(15,23,42,0.05)]",
+                      message.speaker === "user"
+                        ? "rounded-br-md bg-slate-950 text-white"
+                        : "rounded-bl-md border border-slate-200 bg-white text-slate-700"
+                    )}
+                  >
+                    {message.text}
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+      <button
+        onClick={onNextResponse}
+        className="mt-4 inline-flex items-center justify-center rounded-full bg-slate-950 px-5 py-3.5 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(15,23,42,0.16)] transition hover:bg-slate-800"
+      >
+        {isComplete ? "View Feedback" : "Next Response"}
+        <ChevronRight className="ml-2 h-4 w-4" />
+      </button>
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        <ControlButton icon={Mic} label="Microphone" active={!typedMode} onClick={onToggleTypedMode} />
+        <ControlButton icon={MessageSquare} label="Type instead" active={typedMode} onClick={onToggleTypedMode} />
+        <ControlButton icon={Lightbulb} label="Hint" active={hintOpen} onClick={onToggleHint} />
+        <ControlButton icon={Square} label="End session" active={false} onClick={onEndSession} danger />
+      </div>
+    </div>
+  );
+}
+
+function FeedbackScreen({
+  mode,
+  onPracticeAgain,
+  onOpenAnalytics,
+  onBack
+}: {
+  mode: PracticeMode;
+  onPracticeAgain: () => void;
+  onOpenAnalytics: () => void;
+  onBack: () => void;
+}) {
+  const scenario = practiceScenarios[mode];
+
+  return (
+    <div className="h-full overflow-y-auto pb-6 scrollbar-hidden">
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white/70 text-slate-600"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="rounded-full border border-white/70 bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          Session Feedback
+        </div>
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(15,23,42,0.82),rgba(30,41,59,0.74))] p-5 text-white shadow-[0_24px_70px_rgba(15,23,42,0.18)]">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/60">Overall score</p>
+            <h3 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{scenario.feedback.overallScore}</h3>
+            <p className="mt-2 text-sm leading-6 text-white/70">
+              Strong command of the conversation with room to make the ending even sharper.
+            </p>
+          </div>
+          <ScoreRing value={scenario.feedback.overallScore} size={92} strokeWidth={9} light />
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        {scenario.feedback.metrics.map((metric) => (
+          <div key={metric.label} className="rounded-[22px] border border-white/70 bg-white/82 p-4 shadow-[0_14px_36px_rgba(15,23,42,0.05)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{metric.label}</p>
+            <CountUp value={metric.value} className="mt-3 block text-3xl font-semibold tracking-[-0.04em] text-slate-950" />
+            <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${metricToneMap[metric.tone] ?? "bg-slate-100 text-slate-700"}`}>
+              Premium signal
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <MiniStatCard label="Filler words" value={String(scenario.feedback.fillerWords)} subtitle="Across the full session" />
+        <MiniStatCard label="Pacing" value={scenario.feedback.pacing} subtitle="Steady and coachable" />
+      </div>
+      <div className="mt-4 rounded-[24px] border border-white/70 bg-white/82 p-4 shadow-[0_14px_36px_rgba(15,23,42,0.05)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Strengths</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {scenario.feedback.strengths.map((item) => (
+            <span key={item} className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+              {item}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 rounded-[24px] border border-white/70 bg-white/82 p-4 shadow-[0_14px_36px_rgba(15,23,42,0.05)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Improvements</p>
+        <ul className="mt-3 space-y-2">
+          {scenario.feedback.improvements.map((item) => (
+            <li key={item} className="text-sm leading-6 text-slate-600">
+              {item}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="mt-3 rounded-[24px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(241,245,249,0.84))] p-4 shadow-[0_14px_36px_rgba(15,23,42,0.05)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Rewritten response</p>
+        <p className="mt-3 text-sm leading-6 text-slate-700">{scenario.feedback.rewrittenResponse}</p>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <button
+          onClick={onPracticeAgain}
+          className="rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(15,23,42,0.14)]"
+        >
+          Practice Again
+        </button>
+        <button
+          onClick={onOpenAnalytics}
+          className="rounded-full border border-slate-200 bg-white/75 px-4 py-3 text-sm font-semibold text-slate-700"
+        >
+          Open Analytics
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsScreen({
+  mode,
+  theme
+}: {
+  mode: PracticeMode;
+  theme: ThemePreference;
+}) {
+  const barGradient =
+    theme === "Dark"
+      ? "bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(96,165,250,0.82))]"
+      : "bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(96,165,250,0.88))]";
+
+  return (
+    <div className="h-full overflow-y-auto pb-24 scrollbar-hidden">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Progress Analytics</p>
+      <h3 className="mt-2 text-[28px] font-semibold tracking-[-0.04em] text-slate-950">Momentum you can feel.</h3>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <MiniStatCard label="Sessions completed" value="42" subtitle="Last 30 days" />
+        <MiniStatCard label="Current streak" value="18" subtitle="Days in a row" />
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Weekly reps</p>
+            <p className="mt-2 text-lg font-semibold text-slate-950">Steady, compounding practice</p>
+          </div>
+          <TrendingUp className="h-5 w-5 text-slate-900" />
+        </div>
+        <div className="mt-6 flex items-end gap-2">
+          {weeklyPractice.map((value, index) => (
+            <motion.div
+              key={`${value}-${index}`}
+              initial={{ height: 0 }}
+              animate={{ height: value * 12 }}
+              transition={{ duration: 0.5, delay: index * 0.04 }}
+              className={`flex-1 rounded-t-[14px] ${barGradient}`}
+            />
+          ))}
+        </div>
+        <div className="mt-3 flex justify-between text-[11px] font-medium uppercase tracking-[0.12em] text-slate-400">
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+            <span key={day}>{day}</span>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Skill trend</p>
+            <p className="mt-2 text-lg font-semibold text-slate-950">Confidence and clarity are climbing.</p>
+          </div>
+          <BarChart3 className="h-5 w-5 text-slate-900" />
+        </div>
+        <TrendLine values={skillTrend} />
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <MiniStatCard label="Best scenario" value={practiceScenarios[mode].shortTitle} subtitle="Highest consistency score" />
+        <MiniStatCard label="Weakest area" value="Pacing" subtitle="Mostly on fast openings" />
+      </div>
+    </div>
+  );
+}
+
+function ProfileScreen({
+  mode,
+  notificationsEnabled,
+  voiceEnabled,
+  theme,
+  onToggleNotifications,
+  onToggleVoice,
+  onThemeChange,
+  onModeSelect
+}: {
+  mode: PracticeMode;
+  notificationsEnabled: boolean;
+  voiceEnabled: boolean;
+  theme: ThemePreference;
+  onToggleNotifications: () => void;
+  onToggleVoice: () => void;
+  onThemeChange: (value: ThemePreference) => void;
+  onModeSelect: (mode: PracticeMode) => void;
+}) {
+  return (
+    <div className="h-full overflow-y-auto pb-24 scrollbar-hidden">
+      <div className="rounded-[28px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(241,245,249,0.75))] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center rounded-[20px] bg-slate-950 text-white">
+              <UserRound className="h-6 w-6" />
+            </div>
+            <div>
+              <p className="text-xl font-semibold tracking-[-0.03em] text-slate-950">Jordan Lee</p>
+              <p className="text-sm text-slate-500">Goal: sound calmer and clearer under pressure</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-slate-950 px-3 py-1 text-xs font-semibold text-white">Pro</span>
+        </div>
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Preferred practice modes</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {scenarioModes.map((item) => (
+            <button
+              key={item}
+              onClick={() => onModeSelect(item)}
+              className={`rounded-full px-4 py-2 text-sm transition ${
+                item === mode ? "bg-slate-950 text-white" : "border border-slate-200 bg-white/70 text-slate-600"
+              }`}
+            >
+              {practiceScenarios[item].shortTitle}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+        <SettingRow
+          icon={Bell}
+          title="Practice reminders"
+          description="Gentle daily prompts to keep the streak moving."
+          enabled={notificationsEnabled}
+          onToggle={onToggleNotifications}
+        />
+        <div className="my-4 h-px bg-slate-200/80" />
+        <SettingRow
+          icon={Mic}
+          title="Voice mode"
+          description="Prefer spoken rehearsal by default when sessions begin."
+          enabled={voiceEnabled}
+          onToggle={onToggleVoice}
+        />
+        <div className="my-4 h-px bg-slate-200/80" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-950">Theme preference</p>
+              <p className="mt-1 text-sm leading-6 text-slate-600">Keep the prototype crisp in light mode, switch to dark, or adapt automatically.</p>
+            </div>
+          </div>
+          <div className="flex rounded-full border border-slate-200 bg-slate-50 p-1">
+            {(["Light", "Dark", "Auto"] as const).map((option) => (
+              <button
+                key={option}
+                onClick={() => onThemeChange(option)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  option === theme ? "bg-slate-950 text-white" : "text-slate-500"
+                }`}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabBar({
+  currentScreen,
+  onNavigate
+}: {
+  currentScreen: AppScreen;
+  onNavigate: (screen: AppScreen) => void;
+}) {
+  const tabs = [
+    { screen: "home" as const, label: "Home", icon: Home },
+    { screen: "scenarios" as const, label: "Modes", icon: Target },
+    { screen: "analytics" as const, label: "Progress", icon: TrendingUp },
+    { screen: "profile" as const, label: "Profile", icon: UserRound }
+  ];
+
+  return (
+    <div className="absolute inset-x-4 bottom-4 z-30 rounded-[26px] border border-white/80 bg-white/86 p-2 shadow-[0_24px_60px_rgba(15,23,42,0.12)] backdrop-blur-2xl">
+      <div className="grid grid-cols-4 gap-2">
+        {tabs.map((tab) => {
+          const active = tab.screen === currentScreen;
+
+          return (
+            <button
+              key={tab.label}
+              onClick={() => onNavigate(tab.screen)}
+              className={cn(
+                "flex min-h-[52px] w-full flex-col items-center justify-center rounded-[18px] px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.12em] transition",
+                active ? "bg-slate-950 text-white" : "text-slate-500"
+              )}
+            >
+              <tab.icon className="mb-1 h-4 w-4 shrink-0" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SpeakingOrb() {
+  return (
+    <div className="relative flex h-12 w-12 items-center justify-center">
+      <motion.span
+        className="absolute h-12 w-12 rounded-full bg-sky-400/30"
+        animate={{ scale: [1, 1.26, 1], opacity: [0.65, 0.2, 0.65] }}
+        transition={{ duration: 2.2, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+      />
+      <motion.span
+        className="absolute h-9 w-9 rounded-full bg-violet-400/25"
+        animate={{ scale: [1, 1.18, 1], opacity: [0.55, 0.18, 0.55] }}
+        transition={{ duration: 1.8, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut", delay: 0.2 }}
+      />
+      <div className="relative flex h-7 w-7 items-center justify-center rounded-full bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.2)]">
+        <WandSparkles className="h-3.5 w-3.5" />
+      </div>
+    </div>
+  );
+}
+
+function ControlButton({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+  danger
+}: {
+  icon: typeof Mic;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "rounded-[22px] border px-2 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] transition",
+        danger
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : active
+            ? "border-slate-900/10 bg-slate-950 text-white shadow-[0_18px_40px_rgba(15,23,42,0.14)]"
+            : "border-slate-200 bg-white/80 text-slate-500"
+      )}
+    >
+      <Icon className="mx-auto mb-1 h-4 w-4" />
+      {label}
+    </button>
+  );
+}
+
+function SettingRow({
+  icon: Icon,
+  title,
+  description,
+  enabled,
+  onToggle
+}: {
+  icon: typeof Bell;
+  title: string;
+  description: string;
+  enabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-slate-950">{title}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        aria-label={title}
+        onClick={onToggle}
+        className={cn(
+          "relative mt-0.5 h-[31px] w-[51px] shrink-0 rounded-full border p-[2px] transition-all duration-300 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300",
+          enabled
+            ? "border-slate-900/5 bg-[linear-gradient(135deg,#1b2457,#0f172a)] shadow-[inset_0_1px_1px_rgba(255,255,255,0.16),inset_0_-1px_2px_rgba(15,23,42,0.18),0_10px_20px_rgba(15,23,42,0.08)]"
+            : "border-slate-200 bg-[linear-gradient(180deg,#e2e8f0,#cbd5e1)] shadow-[inset_0_1px_1px_rgba(255,255,255,0.8),0_8px_16px_rgba(15,23,42,0.06)]"
+        )}
+      >
+        <span
+          className={cn(
+            "pointer-events-none absolute inset-[2px] rounded-full transition-opacity duration-300",
+            enabled
+              ? "bg-[linear-gradient(180deg,rgba(255,255,255,0.12),transparent_60%)] opacity-100"
+              : "bg-[linear-gradient(180deg,rgba(255,255,255,0.22),transparent_65%)] opacity-80"
+          )}
+        />
+        <span
+          className={cn(
+            "absolute left-[2px] top-[2px] h-[27px] w-[27px] rounded-full bg-[linear-gradient(180deg,#ffffff,#f8fafc)] shadow-[0_6px_16px_rgba(15,23,42,0.16),inset_0_1px_0_rgba(255,255,255,0.95)] transition-transform duration-300 ease-out",
+            enabled ? "translate-x-5" : "translate-x-0"
+          )}
+        />
+      </button>
+    </div>
+  );
+}
+
+function SetupSectionTitle({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div>
+      <p className="text-sm font-semibold text-slate-900">{title}</p>
+      <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, suffix = "" }: { label: string; value: string; suffix?: string }) {
+  return (
+    <div className="rounded-[20px] bg-slate-50 p-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</p>
+      <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-slate-950">
+        {value}
+        {suffix}
+      </p>
+    </div>
+  );
+}
+
+function MiniStatCard({
+  label,
+  value,
+  subtitle
+}: {
+  label: string;
+  value: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="rounded-[24px] border border-white/70 bg-white/82 p-4 shadow-[0_14px_36px_rgba(15,23,42,0.05)]">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-slate-950">{value}</p>
+      <p className="mt-2 text-sm leading-6 text-slate-500">{subtitle}</p>
+    </div>
+  );
+}
+
+function ScoreRing({
+  value,
+  size,
+  strokeWidth,
+  light
+}: {
+  value: number;
+  size: number;
+  strokeWidth: number;
+  light?: boolean;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (value / 100) * circumference;
+
+  return (
+    <div className="relative" style={{ height: size, width: size }}>
+      <svg className="-rotate-90" height={size} width={size}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          fill="transparent"
+          r={radius}
+          stroke={light ? "rgba(255,255,255,0.16)" : "rgba(148,163,184,0.22)"}
+          strokeWidth={strokeWidth}
+        />
+        <motion.circle
+          cx={size / 2}
+          cy={size / 2}
+          fill="transparent"
+          r={radius}
+          stroke={light ? "#ffffff" : "#0f172a"}
+          strokeLinecap="round"
+          strokeWidth={strokeWidth}
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{ duration: 0.9, ease: "easeOut" }}
+          style={{ strokeDasharray: circumference }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <CountUp
+          value={value}
+          className={cn("text-2xl font-semibold tracking-[-0.04em]", light ? "text-white" : "text-slate-950")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TrendLine({ values }: { values: number[] }) {
+  const width = 256;
+  const height = 96;
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const points = values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * width;
+      const y = height - ((value - min) / Math.max(max - min, 1)) * (height - 18) - 9;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="mt-5">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-28 w-full overflow-visible">
+        <defs>
+          <linearGradient id="trend-line" x1="0%" x2="100%" y1="0%" y2="0%">
+            <stop offset="0%" stopColor="#0f172a" />
+            <stop offset="100%" stopColor="#38bdf8" />
+          </linearGradient>
+        </defs>
+        <polyline
+          fill="none"
+          points={points}
+          stroke="url(#trend-line)"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="4"
+        />
+        {values.map((value, index) => {
+          const x = (index / (values.length - 1)) * width;
+          const y = height - ((value - min) / Math.max(max - min, 1)) * (height - 18) - 9;
+
+          return <circle key={`${value}-${index}`} cx={x} cy={y} fill="#0f172a" r="4" />;
+        })}
+      </svg>
+      <div className="mt-1 flex justify-between text-[11px] font-medium uppercase tracking-[0.12em] text-slate-400">
+        {["W1", "W2", "W3", "W4", "W5", "W6", "W7"].map((label) => (
+          <span key={label}>{label}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+-----components/phone/conversation-coach-demo.tsx-----
+
+-----components/sections/navbar.tsx-----
+import Link from "next/link";
+
+import { buttonStyles } from "@/components/ui/button";
+
+const navItems = [
+  { label: "Product", href: "#product" },
+  { label: "Scenarios", href: "#scenarios" },
+  { label: "How It Works", href: "#how-it-works" },
+  { label: "Pricing", href: "#pricing" },
+  { label: "Download", href: "#download" }
+];
+
+export function Navbar() {
+  return (
+    <header className="sticky top-0 z-50">
+      <div className="mx-auto max-w-7xl px-6 pt-4">
+        <div className="flex items-center justify-between rounded-full border border-white/60 bg-white/70 px-4 py-3 shadow-[0_16px_60px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
+          <Link href="/" className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f172a,#3b82f6,#8b5cf6)] text-sm font-semibold text-white shadow-[0_12px_24px_rgba(59,130,246,0.28)]">
+              m
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-slate-950">maya</p>
+              <p className="text-xs text-slate-500">AI rehearsal for real life</p>
+            </div>
+          </Link>
+          <nav className="hidden items-center gap-7 text-sm text-slate-600 lg:flex">
+            {navItems.map((item) => (
+              <a key={item.label} href={item.href} className="transition hover:text-slate-950">
+                {item.label}
+              </a>
+            ))}
+          </nav>
+          <a href="#showcase" className={buttonStyles("secondary")}>
+            Try Demo
+          </a>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+-----components/sections/navbar.tsx-----
+
+-----components/sections/hero-section.tsx-----
+"use client";
+
+import { motion } from "framer-motion";
+import { ArrowRight, AudioLines, Briefcase, Presentation, Users, WandSparkles } from "lucide-react";
+
+import { ConversationCoachDemo } from "@/components/phone/conversation-coach-demo";
+import { buttonStyles } from "@/components/ui/button";
+import { trustBadges } from "@/data/conversation-coach";
+
+const floatingCards = [
+  { label: "Interview mode", icon: Briefcase, position: "-left-16 top-20" },
+  { label: "Real-time AI feedback", icon: WandSparkles, position: "-right-2 top-14" },
+  { label: "Networking practice", icon: Users, position: "-left-20 bottom-24" },
+  { label: "Presentation scoring", icon: Presentation, position: "-right-4 bottom-20", priorityClass: "z-[60]" }
+];
+
+export function HeroSection() {
+  return (
+    <section id="product" className="relative overflow-hidden px-6 pb-24 pt-14 sm:pb-32">
+      <div className="absolute inset-x-0 top-0 -z-20 h-[760px] bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.35),transparent_32%),radial-gradient(circle_at_top_right,rgba(167,139,250,0.24),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.9),rgba(247,248,252,0.7))]" />
+      <div className="absolute inset-x-0 top-24 -z-10 mx-auto h-[680px] max-w-7xl rounded-[48px] border border-white/50 bg-hero-grid bg-[size:48px_48px] bg-center bg-no-repeat opacity-50 [mask-image:linear-gradient(to_bottom,rgba(0,0,0,0.5),transparent_85%)]" />
+      <div className="mx-auto grid max-w-7xl gap-16 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+          className="relative"
+        >
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/75 px-4 py-2 text-sm text-slate-600 shadow-[0_10px_40px_rgba(15,23,42,0.05)] backdrop-blur-xl">
+            <AudioLines className="h-4 w-4 text-sky-500" />
+            Premium AI conversation rehearsal for moments that matter
+          </div>
+          <h1 className="max-w-3xl text-5xl font-semibold leading-[1.02] tracking-[-0.04em] text-slate-950 sm:text-6xl lg:text-7xl">
+            Practice every <span className="font-display italic">high-stakes</span> conversation before it happens.
+          </h1>
+          <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
+            maya helps you rehearse interviews, networking, dating, and presentations with AI-powered feedback that actually improves how you communicate.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-4">
+            <a href="#showcase" className={buttonStyles("primary")}>
+              Try Interactive Demo
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </a>
+            <a href="#how-it-works" className={buttonStyles("secondary")}>
+              See How It Works
+            </a>
+          </div>
+          <div className="mt-10 flex flex-wrap gap-3">
+            {trustBadges.map((badge) => (
+              <div
+                key={badge}
+                className="rounded-full border border-slate-200/70 bg-white/70 px-4 py-2 text-sm text-slate-600 backdrop-blur-xl"
+              >
+                {badge}
+              </div>
+            ))}
+          </div>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 32, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.85, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
+          className="relative mx-auto w-full max-w-[620px]"
+        >
+          {floatingCards.map((card, index) => (
+            <motion.div
+              key={card.label}
+              className={`absolute z-20 hidden rounded-[24px] border border-white/70 bg-white/80 px-4 py-3 text-sm font-medium text-slate-700 shadow-[0_24px_80px_rgba(15,23,42,0.09)] backdrop-blur-2xl lg:flex ${card.position} ${card.priorityClass ?? ""}`}
+              animate={{ y: [0, index % 2 === 0 ? -10 : 10, 0], rotate: [0, index % 2 === 0 ? -2 : 2, 0] }}
+              transition={{ duration: 5 + index, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+            >
+              <card.icon className="mr-3 h-4 w-4 text-slate-900" />
+              {card.label}
+            </motion.div>
+          ))}
+          <ConversationCoachDemo initialMode="presentation" initialScreen="home" />
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
+-----components/sections/hero-section.tsx-----
+
+-----components/sections/feature-section.tsx-----
+"use client";
+
+import { motion } from "framer-motion";
+import { Briefcase, Heart, Presentation, Users } from "lucide-react";
+
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { featureHighlights } from "@/data/conversation-coach";
+import { PracticeMode } from "@/lib/types";
+
+const iconMap: Record<PracticeMode, typeof Briefcase> = {
+  interview: Briefcase,
+  networking: Users,
+  dating: Heart,
+  presentation: Presentation
+};
+
+const accentMap: Record<PracticeMode, string> = {
+  interview: "from-sky-500/20 to-cyan-300/15",
+  networking: "from-violet-500/20 to-sky-300/15",
+  dating: "from-rose-500/20 to-orange-300/15",
+  presentation: "from-teal-500/20 to-sky-300/15"
+};
+
+export function FeatureSection() {
+  return (
+    <section id="scenarios" className="px-6 py-24 sm:py-32">
+      <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-3xl text-center">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Practice Modes</p>
+          <h2 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
+            Four high-stakes scenarios, each built like a focused product surface.
+          </h2>
+          <p className="mt-5 text-lg text-slate-600">
+            maya adapts the persona, pressure, and feedback language to the situation you are actually preparing for.
+          </p>
+        </div>
+        <div className="mt-14 grid gap-6 lg:grid-cols-4">
+          {featureHighlights.map((feature, index) => {
+            const Icon = iconMap[feature.mode];
+
+            return (
+              <motion.div
+                key={feature.title}
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, amount: 0.35 }}
+                transition={{ delay: index * 0.08, duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <GlassPanel className={`h-full overflow-hidden p-6 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(255,255,255,0.58)),linear-gradient(135deg,var(--tw-gradient-stops))] ${accentMap[feature.mode]}`}>
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/70 bg-white/80 shadow-[0_12px_32px_rgba(15,23,42,0.08)]">
+                    <Icon className="h-5 w-5 text-slate-900" />
+                  </div>
+                  <h3 className="mt-10 text-2xl font-semibold tracking-[-0.03em] text-slate-950">{feature.title}</h3>
+                  <p className="mt-4 text-base leading-7 text-slate-600">{feature.description}</p>
+                </GlassPanel>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+-----components/sections/feature-section.tsx-----
+
+-----components/sections/showcase-section.tsx-----
+"use client";
+
+import { startTransition, useDeferredValue, useState } from "react";
+import { motion } from "framer-motion";
+
+import { ConversationCoachDemo } from "@/components/phone/conversation-coach-demo";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { practiceScenarios, scenarioModes, showcaseScreenSummaries } from "@/data/conversation-coach";
+import { AppScreen, PracticeMode } from "@/lib/types";
+
+const screenOrder: AppScreen[] = ["onboarding", "home", "scenarios", "setup", "live", "feedback", "analytics", "profile"];
+
+const screenLabelMap: Record<AppScreen, string> = {
+  onboarding: "Onboarding",
+  home: "Home",
+  scenarios: "Scenarios",
+  setup: "Setup",
+  live: "Live Session",
+  feedback: "Feedback",
+  analytics: "Analytics",
+  profile: "Profile"
+};
+
+export function ShowcaseSection() {
+  const [mode, setMode] = useState<PracticeMode>("interview");
+  const [screen, setScreen] = useState<AppScreen>("live");
+  const deferredScreen = useDeferredValue(screen);
+
+  const currentScenario = practiceScenarios[mode];
+  const currentSummary = showcaseScreenSummaries[deferredScreen];
+
+  return (
+    <section id="showcase" className="px-6 py-24 sm:py-32">
+      <div className="mx-auto max-w-7xl">
+        <div className="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 0.35 }}
+            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+            className="space-y-6"
+          >
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Interactive Showcase</p>
+            <h2 className="text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
+              A clickable iPhone prototype that behaves like the product pitch.
+            </h2>
+            <p className="max-w-2xl text-lg leading-8 text-slate-600">
+              Switch modes, jump between screens, and tap around the phone. The entire experience is rendered in React and driven by mocked local state.
+            </p>
+            <GlassPanel className="p-6">
+              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">{currentSummary.eyebrow}</p>
+              <h3 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">{currentSummary.title}</h3>
+              <p className="mt-4 text-base leading-7 text-slate-600">{currentSummary.description}</p>
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-[24px] border border-slate-200/80 bg-slate-50/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Active mode</p>
+                  <p className="mt-2 text-lg font-semibold text-slate-950">{currentScenario.title}</p>
+                  <p className="mt-1 text-sm text-slate-600">{currentScenario.summary}</p>
+                </div>
+                <div className="rounded-[24px] border border-slate-200/80 bg-slate-50/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Pitch-worthy stat</p>
+                  <p className="mt-2 text-lg font-semibold text-slate-950">{currentScenario.stat}</p>
+                  <p className="mt-1 text-sm text-slate-600">Each mode is intentionally specific, so the demo feels credible instead of generic.</p>
+                </div>
+              </div>
+            </GlassPanel>
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-3">
+                {scenarioModes.map((option) => {
+                  const active = option === mode;
+
+                  return (
+                    <button
+                      key={option}
+                      onClick={() =>
+                        startTransition(() => {
+                          setMode(option);
+                        })
+                      }
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                        active
+                          ? "bg-slate-950 text-white shadow-[0_16px_40px_rgba(15,23,42,0.16)]"
+                          : "border border-slate-200/80 bg-white/70 text-slate-600 hover:text-slate-950"
+                      }`}
+                    >
+                      {practiceScenarios[option].shortTitle}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {screenOrder.map((option) => {
+                  const active = option === screen;
+
+                  return (
+                    <button
+                      key={option}
+                      onClick={() =>
+                        startTransition(() => {
+                          setScreen(option);
+                        })
+                      }
+                      className={`rounded-full px-4 py-2 text-sm transition ${
+                        active
+                          ? "border border-slate-900/10 bg-white text-slate-950 shadow-[0_16px_40px_rgba(15,23,42,0.09)]"
+                          : "border border-transparent bg-slate-200/50 text-slate-500 hover:bg-white/75 hover:text-slate-900"
+                      }`}
+                    >
+                      {screenLabelMap[option]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.97 }}
+            whileInView={{ opacity: 1, y: 0, scale: 1 }}
+            viewport={{ once: true, amount: 0.3 }}
+            transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+            className="rounded-[40px] border border-white/50 bg-[linear-gradient(180deg,rgba(255,255,255,0.75),rgba(255,255,255,0.4))] p-4 shadow-[0_32px_100px_rgba(15,23,42,0.08)] backdrop-blur-3xl sm:p-6"
+          >
+            <ConversationCoachDemo
+              initialMode={mode}
+              initialScreen={screen}
+              onStateChange={(nextState) => {
+                startTransition(() => {
+                  setMode(nextState.mode);
+                  setScreen(nextState.screen);
+                });
+              }}
+            />
+          </motion.div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+-----components/sections/showcase-section.tsx-----
+
+-----components/sections/how-it-works-section.tsx-----
+"use client";
+
+import { motion } from "framer-motion";
+
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { howItWorks } from "@/data/conversation-coach";
+
+export function HowItWorksSection() {
+  return (
+    <section id="how-it-works" className="px-6 py-24 sm:py-32">
+      <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">How It Works</p>
+          <h2 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
+            A simple practice loop built to compound.
+          </h2>
+        </div>
+        <div className="mt-14 grid gap-6 lg:grid-cols-4">
+          {howItWorks.map((item, index) => (
+            <motion.div
+              key={item.step}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: 0.4 }}
+              transition={{ delay: index * 0.08, duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <GlassPanel className="h-full p-6">
+                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-400">{item.step}</p>
+                <h3 className="mt-8 text-2xl font-semibold tracking-[-0.03em] text-slate-950">{item.title}</h3>
+                <p className="mt-4 text-base leading-7 text-slate-600">{item.body}</p>
+              </GlassPanel>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+-----components/sections/how-it-works-section.tsx-----
+
+-----components/sections/pricing-section.tsx-----
+"use client";
+
+import { motion } from "framer-motion";
+import { Check } from "lucide-react";
+
+import { buttonStyles } from "@/components/ui/button";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { pricingTiers } from "@/data/conversation-coach";
+
+export function PricingSection() {
+  return (
+    <section id="pricing" className="px-6 py-24 sm:py-32">
+      <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Pricing</p>
+          <h2 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
+            Mock pricing, grounded enough to feel launch-ready.
+          </h2>
+        </div>
+        <div className="mt-14 grid gap-6 lg:grid-cols-3">
+          {pricingTiers.map((tier, index) => (
+            <motion.div
+              key={tier.name}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: 0.35 }}
+              transition={{ delay: index * 0.08, duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <GlassPanel
+                className={`h-full p-7 ${tier.featured ? "relative border-slate-900/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(236,242,255,0.76))]" : ""}`}
+              >
+                {tier.featured ? (
+                  <span className="absolute right-6 top-6 rounded-full bg-slate-950 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
+                    Most Popular
+                  </span>
+                ) : null}
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">{tier.name}</p>
+                <div className="mt-6 flex items-end gap-2">
+                  <span className="text-5xl font-semibold tracking-[-0.04em] text-slate-950">{tier.price}</span>
+                  <span className="pb-1 text-slate-500">/ month</span>
+                </div>
+                <p className="mt-4 text-base text-slate-600">{tier.description}</p>
+                <a href="#download" className={`mt-8 w-full ${buttonStyles(tier.featured ? "primary" : "secondary")}`}>
+                  {tier.cta}
+                </a>
+                <div className="mt-8 space-y-4">
+                  {tier.features.map((feature) => (
+                    <div key={feature} className="flex items-start gap-3 text-sm text-slate-600">
+                      <span className="mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 text-white">
+                        <Check className="h-3 w-3" />
+                      </span>
+                      {feature}
+                    </div>
+                  ))}
+                </div>
+              </GlassPanel>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+-----components/sections/pricing-section.tsx-----
+
+-----components/sections/final-cta-section.tsx-----
+import { ArrowRight } from "lucide-react";
+
+import { buttonStyles } from "@/components/ui/button";
+
+export function FinalCtaSection() {
+  return (
+    <section id="download" className="px-6 py-24 sm:py-32">
+      <div className="mx-auto max-w-6xl rounded-[40px] border border-white/60 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.22),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(167,139,250,0.22),transparent_36%),linear-gradient(180deg,rgba(255,255,255,0.88),rgba(255,255,255,0.64))] p-10 shadow-[0_32px_100px_rgba(15,23,42,0.08)] backdrop-blur-3xl sm:p-14">
+        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Final CTA</p>
+        <h2 className="mt-4 max-w-3xl text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
+          Train every conversation before it matters.
+        </h2>
+        <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
+          Designed to feel polished enough for an investor demo, but useful enough that people would actually want to come back tomorrow.
+        </p>
+        <div className="mt-8 flex flex-wrap gap-4">
+          <a href="#showcase" className={buttonStyles("primary")}>
+            Try Interactive Demo
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </a>
+          <a href="#pricing" className={buttonStyles("secondary")}>
+            View Pricing
+          </a>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+-----components/sections/final-cta-section.tsx-----
+
+-----components/sections/footer.tsx-----
+export function Footer() {
+  return (
+    <footer className="px-6 pb-12 pt-8">
+      <div className="mx-auto flex max-w-7xl flex-col gap-4 border-t border-slate-200/80 pt-8 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="font-semibold text-slate-900">maya</p>
+          <p className="mt-1">AI-powered rehearsal for real-world communication.</p>
+        </div>
+        <div className="flex gap-6">
+          <a href="#product" className="transition hover:text-slate-900">
+            Product
+          </a>
+          <a href="#pricing" className="transition hover:text-slate-900">
+            Pricing
+          </a>
+          <a href="#download" className="transition hover:text-slate-900">
+            Download
+          </a>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+-----components/sections/footer.tsx-----
+
+-----data/conversation-coach.ts-----
+import {
+  AppScreen,
+  OnboardingSlide,
+  PracticeMode,
+  PracticeScenario,
+  PricingTier,
+  ShowcaseScreenSummary
+} from "@/lib/types";
+
+export const onboardingSlides: OnboardingSlide[] = [
+  {
+    eyebrow: "Practice Engine",
+    title: "Rehearse the conversation before the room gets real.",
+    body:
+      "Switch between interviews, networking, dating, and presentations with AI personas calibrated for each scenario."
+  },
+  {
+    eyebrow: "Live Persona",
+    title: "Talk through pressure with grounded, realistic responses.",
+    body:
+      "Each practice run adapts to your pacing, confidence, and answer structure so the session feels like an actual conversation."
+  },
+  {
+    eyebrow: "Instant Review",
+    title: "Get sharp feedback on clarity, warmth, pacing, and filler words.",
+    body:
+      "maya turns every rehearsal into a scorecard, a rewrite, and a plan for the next round."
+  }
+];
+
+export const practiceScenarios: Record<PracticeMode, PracticeScenario> = {
+  interview: {
+    id: "interview",
+    title: "Interview Coach",
+    shortTitle: "Interviews",
+    summary: "Practice crisp, confident stories for interviews that matter.",
+    description:
+      "Mock behavioral interviews, role-specific prompts, and hiring manager follow-ups with live coaching cues.",
+    stat: "94% stronger answer structure",
+    accentFrom: "from-sky-400/70",
+    accentTo: "to-cyan-300/60",
+    tags: ["Behavioral", "Hiring Manager", "Storytelling"],
+    difficulties: ["Warm-up", "Realistic", "Stretch"],
+    personas: [
+      { id: "avery", name: "Avery Chen", role: "Engineering Manager", focus: "Leadership under pressure" },
+      { id: "maya", name: "Maya Patel", role: "PM Director", focus: "Cross-functional influence" },
+      { id: "jonah", name: "Jonah Brooks", role: "Recruiter", focus: "Clear and concise storytelling" }
+    ],
+    goals: ["Tell a sharper story", "Handle follow-up pressure", "Sound senior and calm"],
+    context: "Software engineer behavioral interview for a growth-stage product team.",
+    opening:
+      "Thanks for being here today. Tell me about a project where you influenced a team without formal authority.",
+    transcript: [
+      {
+        user:
+          "At my last internship I noticed our release notes process kept slipping, so I set up a simple review flow with design, QA, and product to cut the lag.",
+        ai:
+          "That is a promising start. What resistance did you hit, and how did you earn buy-in from people who did not report to you?",
+        reaction: "Engaged",
+        hint: "Lead with the outcome first, then show the conflict, then the action you owned."
+      },
+      {
+        user:
+          "The biggest pushback was that everyone felt another process would slow launches, so I ran a one-week pilot and showed that we actually reduced bug-related hotfixes.",
+        ai:
+          "Good. You are getting more concrete. Tighten the ending by quantifying the impact and your personal contribution in one sentence.",
+        reaction: "Impressed",
+        hint: "Use a single metric and a direct phrase like “I drove” or “I proposed.”"
+      }
+    ],
+    feedback: {
+      overallScore: 92,
+      fillerWords: 6,
+      pacing: "132 wpm",
+      strengths: ["Strong ownership language", "Clear conflict-to-resolution arc", "Calm executive tone"],
+      improvements: ["Quantify impact earlier", "Trim setup details by 12 seconds", "Close with the team outcome"],
+      rewrittenResponse:
+        "I noticed release notes were delaying launches, so I proposed a lightweight review flow across product, design, and QA. After piloting it for one sprint, we reduced bug-related hotfixes by 22% and cut release prep time by nearly a day.",
+      metrics: [
+        { label: "Confidence", value: 94, tone: "sky" },
+        { label: "Clarity", value: 90, tone: "emerald" },
+        { label: "Warmth", value: 82, tone: "violet" },
+        { label: "Question Quality", value: 88, tone: "amber" }
+      ]
+    }
+  },
+  networking: {
+    id: "networking",
+    title: "Networking Coach",
+    shortTitle: "Networking",
+    summary: "Rehearse natural intros, follow-ups, and recruiter conversations.",
+    description:
+      "From career fairs to coffee chats, practice sounding curious, memorable, and easy to continue talking to.",
+    stat: "2.3x more confident first intros",
+    accentFrom: "from-violet-400/70",
+    accentTo: "to-sky-300/55",
+    tags: ["Career Fair", "Recruiter Chat", "Founder Intro"],
+    difficulties: ["Warm-up", "Conference", "High Signal"],
+    personas: [
+      { id: "reid", name: "Reid Lawson", role: "Campus Recruiter", focus: "Compelling and concise introductions" },
+      { id: "sana", name: "Sana Ahmed", role: "Startup Founder", focus: "Curiosity and quick rapport" },
+      { id: "nina", name: "Nina Torres", role: "Product Designer", focus: "Coffee chat follow-ups" }
+    ],
+    goals: ["Make a memorable intro", "Ask better follow-ups", "Keep the energy natural"],
+    context: "A college career fair with limited time and a recruiter juggling multiple students.",
+    opening:
+      "Hey there. I only have a minute before the next student, so give me the quick version. What should I remember about you?",
+    transcript: [
+      {
+        user:
+          "I am a computer science student who likes building user-facing tools, and lately I have been focused on making AI features easier to understand for everyday users.",
+        ai:
+          "Nice direction. That is broad though. Pick one example that shows initiative and tell me why it matters.",
+        reaction: "Curious",
+        hint: "Use one project, one result, one reason it connects to this company."
+      },
+      {
+        user:
+          "I built a study planner that used simple recommendation prompts to help classmates organize deadlines, and more than 120 students used it during finals week.",
+        ai:
+          "That lands well. End by connecting it to what you want next so the recruiter knows how to respond.",
+        reaction: "Warm",
+        hint: "Close with what kind of role or team you are exploring."
+      }
+    ],
+    feedback: {
+      overallScore: 89,
+      fillerWords: 4,
+      pacing: "124 wpm",
+      strengths: ["Natural warmth", "Strong project example", "Good recruiter energy"],
+      improvements: ["State your target role sooner", "Make the closing ask more direct", "Reduce soft qualifiers"],
+      rewrittenResponse:
+        "I build user-facing AI tools, and one recent example is a study planner I shipped for classmates that helped more than 120 students manage finals deadlines. I am looking for product-minded software internships where I can keep building clear, practical experiences like that.",
+      metrics: [
+        { label: "Confidence", value: 88, tone: "violet" },
+        { label: "Clarity", value: 91, tone: "emerald" },
+        { label: "Warmth", value: 95, tone: "rose" },
+        { label: "Question Quality", value: 82, tone: "amber" }
+      ]
+    }
+  },
+  dating: {
+    id: "dating",
+    title: "Dating Coach",
+    shortTitle: "Dating",
+    summary: "Practice chemistry, confidence, and low-pressure banter.",
+    description:
+      "Work through first messages, first dates, and playful conversation without sounding scripted or overrehearsed.",
+    stat: "31% warmer first impressions",
+    accentFrom: "from-rose-400/70",
+    accentTo: "to-orange-300/55",
+    tags: ["First Message", "Banter", "First Date"],
+    difficulties: ["Comfort", "Natural", "High Chemistry"],
+    personas: [
+      { id: "zoe", name: "Zoe Lin", role: "First Date Match", focus: "Playful confidence" },
+      { id: "dylan", name: "Dylan Moss", role: "Hinge Match", focus: "Warm opener energy" },
+      { id: "riley", name: "Riley James", role: "Coffee Date", focus: "Balanced curiosity" }
+    ],
+    goals: ["Sound playful, not forced", "Ask better questions", "Stay relaxed and present"],
+    context: "A first date at a stylish neighborhood coffee bar after matching earlier in the week.",
+    opening:
+      "I am glad we finally made this happen. Your profile said you are into low-stakes adventures. What counts as an ideal one?",
+    transcript: [
+      {
+        user:
+          "Honestly, my favorite kind is when the plan feels loose enough to wander a little, like finding a place we did not mean to end up at.",
+        ai:
+          "That sounds relaxed. You can make it more memorable by adding one specific example and then turning the question back.",
+        reaction: "Interested",
+        hint: "Specificity makes you more vivid. Think one recent place, not a general pattern."
+      },
+      {
+        user:
+          "A few weeks ago I ended up at a tiny bookstore cafe because the rain messed up my plans, and it ended up being the best part of the day. What is your version of that?",
+        ai:
+          "Much better. The image is doing work for you, and the question feels easy to answer.",
+        reaction: "Smiling",
+        hint: "Stay with concrete details. They make you sound grounded and confident."
+      }
+    ],
+    feedback: {
+      overallScore: 87,
+      fillerWords: 3,
+      pacing: "118 wpm",
+      strengths: ["Specific storytelling", "Warm and curious energy", "Balanced back-and-forth"],
+      improvements: ["Keep answers 10% shorter", "Use fewer hedge phrases", "Add one more playful callback"],
+      rewrittenResponse:
+        "A few weeks ago the rain derailed my plans, so I ducked into a tiny bookstore cafe and stayed way longer than I expected. That kind of accidental detour is my favorite. What about you?",
+      metrics: [
+        { label: "Confidence", value: 84, tone: "rose" },
+        { label: "Clarity", value: 88, tone: "amber" },
+        { label: "Warmth", value: 96, tone: "rose" },
+        { label: "Question Quality", value: 90, tone: "sky" }
+      ]
+    }
+  },
+  presentation: {
+    id: "presentation",
+    title: "Presentation Coach",
+    shortTitle: "Presentations",
+    summary: "Sharpen delivery for investor pitches, team updates, and classes.",
+    description:
+      "Practice speaking with structure, command, and clean pacing for audiences that expect clarity fast.",
+    stat: "41% stronger executive presence",
+    accentFrom: "from-teal-400/70",
+    accentTo: "to-sky-300/55",
+    tags: ["Pitch", "Team Update", "Classroom"],
+    difficulties: ["Guided", "Investor Room", "Boardroom"],
+    personas: [
+      { id: "elena", name: "Elena Ross", role: "Seed Investor", focus: "Story and conviction" },
+      { id: "omar", name: "Omar Singh", role: "Team Lead", focus: "Executive clarity" },
+      { id: "lila", name: "Lila Hart", role: "Professor", focus: "Structure and pacing" }
+    ],
+    goals: ["Open with more authority", "Make the narrative tighter", "Land the ask clearly"],
+    context: "A five-minute investor pitch for a communication coaching product.",
+    opening:
+      "You have five minutes. Give me the opening that makes me care about this problem before slide three.",
+    transcript: [
+      {
+        user:
+          "High-stakes conversations decide careers, deals, and relationships, but most people only realize they needed practice after the moment has already passed.",
+        ai:
+          "Strong tension. Now ground it in a customer and a concrete consequence so it feels urgent, not abstract.",
+        reaction: "Focused",
+        hint: "Use one persona and a single cost of poor communication."
+      },
+      {
+        user:
+          "For a student walking into a final-round interview, one weak answer can erase months of preparation. maya gives them a way to rehearse that moment before it arrives.",
+        ai:
+          "That lands. Your next improvement is pacing. Pause after the first sentence and let the claim breathe.",
+        reaction: "Locked In",
+        hint: "Short sentence. Pause. Then customer story."
+      }
+    ],
+    feedback: {
+      overallScore: 95,
+      fillerWords: 2,
+      pacing: "126 wpm",
+      strengths: ["Clear thesis", "Strong audience command", "Convincing problem framing"],
+      improvements: ["Use one slower pause after the hook", "Make the market transition cleaner", "Add a sharper closing ask"],
+      rewrittenResponse:
+        "High-stakes conversations shape careers, deals, and relationships. Yet most people only discover they needed practice after the moment is gone. For a student entering a final-round interview, one weak answer can erase months of preparation. maya lets them rehearse that moment before it arrives.",
+      metrics: [
+        { label: "Confidence", value: 97, tone: "teal" },
+        { label: "Clarity", value: 94, tone: "emerald" },
+        { label: "Warmth", value: 83, tone: "sky" },
+        { label: "Question Quality", value: 90, tone: "amber" }
+      ]
+    }
+  }
+};
+
+export const scenarioModes = Object.keys(practiceScenarios) as PracticeMode[];
+
+export const showcaseScreenSummaries: Record<AppScreen, ShowcaseScreenSummary> = {
+  onboarding: {
+    eyebrow: "Onboarding",
+    title: "A first-run flow designed to feel like premium iOS software.",
+    description:
+      "The opening experience introduces the core value quickly, uses motion for depth, and invites the user into the product without feeling like a checklist."
+  },
+  home: {
+    eyebrow: "Dashboard",
+    title: "The home screen centers momentum, not admin.",
+    description:
+      "Daily streaks, quick actions, a progress ring, and recent practice history make the product feel like a habit-forming coach instead of a one-off utility."
+  },
+  scenarios: {
+    eyebrow: "Modes",
+    title: "Every practice mode is framed like its own product surface.",
+    description:
+      "Scenarios are rich enough to feel specific, but still compact enough to scan in seconds. Each card previews the tone, context, and difficulty."
+  },
+  setup: {
+    eyebrow: "Session Setup",
+    title: "The setup flow makes personalization feel instant.",
+    description:
+      "Users can lock in mode, persona, difficulty, and goal with chips and segmented controls that mimic a polished Figma prototype."
+  },
+  live: {
+    eyebrow: "Live Session",
+    title: "This is the core product: AI conversation rehearsal with visible momentum.",
+    description:
+      "An animated persona, hint surface, rich chat bubbles, and response progression make the practice loop feel alive, not like fake placeholder content."
+  },
+  feedback: {
+    eyebrow: "Results",
+    title: "Feedback reads like a premium analytics stack, not a report dump.",
+    description:
+      "Scores animate in, strengths and improvements are easy to scan, and a rewritten response turns abstract feedback into something instantly usable."
+  },
+  analytics: {
+    eyebrow: "Progress",
+    title: "Progress tracking is calm, visual, and investor-demo ready.",
+    description:
+      "The analytics screen uses elegant charts, concise metric cards, and clear trend language to reinforce long-term value."
+  },
+  profile: {
+    eyebrow: "Profile",
+    title: "Settings keep the app feeling personal and high-touch.",
+    description:
+      "Goals, preferred modes, toggles, and subscription status all live inside the same premium visual language without turning into a cluttered settings dump."
+  }
+};
+
+export const featureHighlights = [
+  {
+    mode: "interview",
+    title: "Interviews",
+    description: "Rehearse behavioral stories, follow-up pressure, and concise answers for real hiring conversations."
+  },
+  {
+    mode: "networking",
+    title: "Networking",
+    description: "Practice recruiter intros, career fair chats, coffee conversations, and cleaner follow-up asks."
+  },
+  {
+    mode: "dating",
+    title: "Dating",
+    description: "Build confidence for first messages, first dates, and playful back-and-forth without sounding scripted."
+  },
+  {
+    mode: "presentation",
+    title: "Presentations",
+    description: "Sharpen your opening, pacing, and executive presence for investor rooms, classrooms, and team updates."
+  }
+] as const;
+
+export const howItWorks = [
+  {
+    step: "01",
+    title: "Choose a scenario",
+    body: "Pick the exact conversation you want to rehearse, from a behavioral interview to a first date."
+  },
+  {
+    step: "02",
+    title: "Practice with an AI persona",
+    body: "Talk through the moment with a responsive persona tuned for the pressure, tone, and context."
+  },
+  {
+    step: "03",
+    title: "Get instant feedback",
+    body: "See how you landed on confidence, clarity, warmth, pacing, and question quality right after the session."
+  },
+  {
+    step: "04",
+    title: "Improve over time",
+    body: "Track streaks, weekly reps, and skill trends so every practice loop compounds."
+  }
+];
+
+export const pricingTiers: PricingTier[] = [
+  {
+    name: "Free",
+    price: "$0",
+    description: "For people testing the habit.",
+    cta: "Start Free",
+    features: ["2 practice modes", "3 sessions per week", "Basic feedback", "Streak tracking"]
+  },
+  {
+    name: "Pro",
+    price: "$29",
+    description: "For serious interview prep and daily reps.",
+    featured: true,
+    cta: "Choose Pro",
+    features: ["Unlimited sessions", "All 4 practice modes", "Advanced feedback", "Saved personas and goals"]
+  },
+  {
+    name: "Teams",
+    price: "$79",
+    description: "For coaching cohorts, clubs, and recruiting teams.",
+    cta: "Talk to Sales",
+    features: ["Shared templates", "Team analytics", "Coach dashboards", "Priority onboarding"]
+  }
+];
+
+export const trustBadges = ["Used for interviews, networking, dating, and presentations", "AI persona feedback in under 60 seconds", "Designed like a polished product demo, not a concept deck"];
+
+-----data/conversation-coach.ts-----
+
+-----lib/types.ts-----
+export type PracticeMode = "interview" | "networking" | "dating" | "presentation";
+
+export type AppScreen =
+  | "onboarding"
+  | "home"
+  | "scenarios"
+  | "setup"
+  | "live"
+  | "feedback"
+  | "analytics"
+  | "profile";
+
+export type Persona = {
+  id: string;
+  name: string;
+  role: string;
+  focus: string;
+};
+
+export type TranscriptTurn = {
+  user: string;
+  ai: string;
+  reaction: string;
+  hint: string;
+};
+
+export type FeedbackMetric = {
+  label: string;
+  value: number;
+  tone: string;
+};
+
+export type PracticeScenario = {
+  id: PracticeMode;
+  title: string;
+  shortTitle: string;
+  summary: string;
+  description: string;
+  stat: string;
+  accentFrom: string;
+  accentTo: string;
+  tags: string[];
+  difficulties: string[];
+  personas: Persona[];
+  goals: string[];
+  context: string;
+  opening: string;
+  transcript: TranscriptTurn[];
+  feedback: {
+    overallScore: number;
+    fillerWords: number;
+    pacing: string;
+    strengths: string[];
+    improvements: string[];
+    rewrittenResponse: string;
+    metrics: FeedbackMetric[];
+  };
+};
+
+export type OnboardingSlide = {
+  eyebrow: string;
+  title: string;
+  body: string;
+};
+
+export type ShowcaseScreenSummary = {
+  eyebrow: string;
+  title: string;
+  description: string;
+};
+
+export type PricingTier = {
+  name: string;
+  price: string;
+  description: string;
+  featured?: boolean;
+  cta: string;
+  features: string[];
+};
+
+-----lib/types.ts-----
+
+-----lib/utils.ts-----
+export function cn(...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(" ");
+}
+
+-----lib/utils.ts-----
+

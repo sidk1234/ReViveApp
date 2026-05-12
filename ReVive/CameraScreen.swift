@@ -8,6 +8,7 @@ import AVFoundation
 import PhotosUI
 import CoreLocation
 import UIKit
+import StoreKit
 
 struct LocationContext {
     let latitude: Double?
@@ -20,13 +21,16 @@ struct LocationContext {
 
 struct CameraScreen: View {
     var guestHeaderInset: CGFloat = 0
+    var bottomOverlayInset: CGFloat = 0
+    var hideNativeBottomControls: Bool = false
+    var onTextEntryActiveChange: (Bool) -> Void = { _ in }
+    var onTextResultActiveChange: (Bool) -> Void = { _ in }
 
     @StateObject private var camera = CameraViewModel()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.colorScheme) private var colorScheme
     @State private var pickedItem: PhotosPickerItem?
-        @State private var pulse = false
         @State private var lastSavedJSON: String?
         @State private var isPhotoPickerPresented = false
         @State private var zipCode: String = ""
@@ -38,13 +42,14 @@ struct CameraScreen: View {
         @State private var notesBarWidth: CGFloat = 0
         @FocusState private var zipFieldFocused: Bool
         @State private var isTextEntryActive: Bool = false
+        @State private var isTextResultActive: Bool = false
+        @State private var keyboardHeight: CGFloat = 0
         @State private var isTextRequestInFlight: Bool = false
         @State private var isHidingResult: Bool = false
         @State private var showQuotaLock: Bool = false
         @State private var quotaLockRequiresUpgrade: Bool = false
         @State private var manualItemText: String = ""
         @FocusState private var manualTextFocused: Bool
-        @Namespace private var shutterNamespace
         @State private var scoreNotice: String?
         @State private var isDuplicateResult: Bool = false
         @State private var lastAnalysisSource: HistorySource = .photo
@@ -58,8 +63,9 @@ struct CameraScreen: View {
         @State private var isZooming: Bool = false
         @State private var showFirstRecycleTutorial: Bool = false
 
-        private let sideSize: CGFloat = 70
-        private let shutterSize: CGFloat = 85
+        @Environment(\.requestReview) private var requestReview
+        @AppStorage("revive.review.lastMilestone") private var reviewLastMilestone: Int = 0
+
         private let bottomBarInset: CGFloat = 16
         private let statusSize: CGFloat = 150
         private let notesCollapsedLines: Int = 2
@@ -71,10 +77,18 @@ struct CameraScreen: View {
             horizontalSizeClass == .regular ? 480 : 360
         }
 
-        private var bottomControlsPadding: CGFloat {
-            let extra = isTextEntryActive ? textEntryKeyboardSpacing : 0
-            return bottomBarInset + extra
-        }
+    private var bottomControlsPadding: CGFloat {
+        let extra = isTextEntryActive ? textEntryKeyboardSpacing : 0
+        return bottomBarInset + bottomOverlayInset + extra
+    }
+
+    private var capturedControlsBottomPadding: CGFloat {
+        bottomControlsPadding + 56
+    }
+
+    private var analysisOverlayBottomPadding: CGFloat {
+        bottomControlsPadding + 52
+    }
 
         private var zoomLabel: String {
             let value = camera.zoomFactor
@@ -137,11 +151,9 @@ struct CameraScreen: View {
     @ViewBuilder private var aiOverlay: some View {
         if hasOverlay {
             if camera.aiIsLoading {
-                VStack {
-                    Spacer()
+                ZStack {
                     loadingStatus
                         .transition(.opacity.combined(with: .scale))
-                    Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(true)
@@ -173,9 +185,9 @@ struct CameraScreen: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 20)
-                .padding(.bottom, 0)
+                .padding(.bottom, analysisOverlayBottomPadding)
                 .padding(.top, 0)
-                .frame(maxHeight: .infinity, alignment: .center)
+                .frame(maxHeight: .infinity, alignment: .bottom)
                 .allowsHitTesting(true)
             }
         }
@@ -564,6 +576,12 @@ struct CameraScreen: View {
         return String(format: "%.1f kg CO2e", clamped)
     }
 
+    private func setTextResultActive(_ active: Bool) {
+        guard active != isTextResultActive else { return }
+        isTextResultActive = active
+        onTextResultActiveChange(active)
+    }
+
     private func clearAIResult() {
         camera.aiResultText = nil
         camera.aiParsedResult = nil
@@ -572,6 +590,7 @@ struct CameraScreen: View {
         notesNeedsReadMore = false
         scoreNotice = nil
         isDuplicateResult = false
+        setTextResultActive(false)
     }
 
     private func resetToCapture() {
@@ -664,6 +683,7 @@ struct CameraScreen: View {
             auth.refreshGuestQuota()
         }
         triggerAddedToBinFeedback(message: status == .markedForRecycle ? "Marked for Recycle" : "Added to Bin")
+        maybeRequestReviewAtScanMilestone()
     }
 
     private func triggerAddedToBinFeedback(message: String) {
@@ -686,6 +706,35 @@ struct CameraScreen: View {
         if auth.enableHaptics {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
+    }
+
+    private func openPhotoLibraryIfAllowed() {
+        guard camera.capturedImage == nil else { return }
+        guard !camera.aiIsLoading else { return }
+        guard !captureControlsDisabled else { return }
+        guard !isTextEntryActive else { return }
+        guard !showQuotaLock else { return }
+        guard !hasOverlay else { return }
+        isPhotoPickerPresented = true
+    }
+
+    private func handleShutterTap() {
+        guard camera.capturedImage == nil else { return }
+        guard !camera.aiIsLoading else { return }
+        guard !captureControlsDisabled else { return }
+        guard !isTextEntryActive else { return }
+        guard !showQuotaLock else { return }
+        guard !hasOverlay else { return }
+        camera.takePhoto()
+    }
+
+    private func handleCaptureButtonHold() {
+        guard camera.capturedImage == nil else { return }
+        guard !camera.aiIsLoading else { return }
+        guard !captureControlsDisabled else { return }
+        guard !showQuotaLock else { return }
+        guard !hasOverlay else { return }
+        openTextEntry()
     }
 
     private func completeFirstRecycleTutorialIfNeeded() {
@@ -753,13 +802,15 @@ struct CameraScreen: View {
         zipFieldFocused = false
         manualTextFocused = false
         clearAIResult()
+        setTextResultActive(true)
         Task { @MainActor in
             let accessToken = await auth.accessTokenForAPI()
             if let accessToken, !accessToken.isEmpty {
                 camera.sendTextToOpenAI(
                     itemText: trimmed,
                     location: context,
-                    accessToken: accessToken
+                    accessToken: accessToken,
+                    isProLocal: auth.hasUnlimitedAnalysis
                 )
             } else {
                 _ = await auth.fetchGuestQuota()
@@ -774,9 +825,27 @@ struct CameraScreen: View {
     }
 
     private func showQuotaLockOverlay() {
+        closeTextEntry()
         quotaLockRequiresUpgrade = auth.isSignedIn
         withAnimation(.easeInOut(duration: 0.25)) {
             showQuotaLock = true
+        }
+        if !auth.isSignedIn {
+            let review = requestReview
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { review() }
+        }
+    }
+
+    private func maybeRequestReviewAtScanMilestone() {
+        let total = history.entries.count
+        let milestones = [10, 25, 50]
+        for milestone in milestones {
+            if total >= milestone && reviewLastMilestone < milestone {
+                reviewLastMilestone = milestone
+                let review = requestReview
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { review() }
+                break
+            }
         }
     }
 
@@ -791,60 +860,27 @@ struct CameraScreen: View {
         .buttonStyle(.plain)
     }
 
-    private var locationToggleButton: some View {
-        locationIconButton {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                toggleLocationEntry()
-            }
-            zipFieldFocused = false
-            didRequestLocationFromZipField = true
-            locationManager.requestLocation()
-        }
-    }
-
     private var captureInstructionBar: some View {
-        Text("Tap the shutter to take a photo. Hold it to type an item.")
-            .font(AppType.body(13))
-            .foregroundStyle(.primary.opacity(0.85))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(
-                Capsule().stroke(instructionBorderColor, lineWidth: 1)
-            )
+        HStack(spacing: 6) {
+            Text("Tap")
+            Image(systemName: "camera.fill")
+                .font(.system(size: 12, weight: .semibold))
+            Text("Capture and hold to type an item.")
+        }
+        .font(AppType.body(13))
+        .foregroundStyle(.primary.opacity(0.85))
+        .lineLimit(2)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule().stroke(instructionBorderColor, lineWidth: 1)
+        )
     }
 
     private var instructionBorderColor: Color {
         colorScheme == .light ? Color.white.opacity(0.92) : Color.primary.opacity(0.2)
-    }
-
-    private var shutterControl: some View {
-        let tap = TapGesture().onEnded { camera.takePhoto() }
-        let longPress = LongPressGesture(minimumDuration: 0.45).onEnded { _ in openTextEntry() }
-        let gesture = longPress.exclusively(before: tap)
-        let reduceMotion = auth.reduceMotionEnabled
-        let scale = reduceMotion ? 1.0 : (pulse ? 1.02 : 0.98)
-
-        return ZStack {
-            Circle()
-                .stroke(Color.green.opacity(0.55), lineWidth: 2)
-                .frame(width: shutterSize, height: shutterSize)
-
-            Circle()
-                .stroke(.primary.opacity(0.16), lineWidth: 1)
-                .frame(width: shutterSize - 10, height: shutterSize - 10)
-
-            Image(systemName: "arrow.3.trianglepath")
-                .foregroundStyle(.green)
-                .font(.system(size: 28, weight: .bold))
-        }
-        .frame(width: shutterSize, height: shutterSize)
-        .scaleEffect(scale)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: pulse)
-        .liquidGlassButton(in: Circle(), tint: AppTheme.mint, interactive: true)
-        .contentShape(Circle())
-        .gesture(gesture)
-        .matchedGeometryEffect(id: "shutterMorph", in: shutterNamespace)
     }
 
     private var textEntryControl: some View {
@@ -908,61 +944,25 @@ struct CameraScreen: View {
         )
         // Pad the bottom slightly to avoid clipping against the keyboard.
         .padding(.bottom, 4)
-        .matchedGeometryEffect(id: "shutterMorph", in: shutterNamespace)
     }
 
-    // New captureControlsRow using different layouts for Text vs Camera mode
+    private var captureUtilityRow: some View {
+        HStack {
+            Spacer(minLength: 0)
+            zoomPill
+                .offset(y: -8)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: capturePanelMaxWidth)
+    }
+
     private var captureControlsRow: some View {
         Group {
             if isTextEntryActive {
-                // TEXT MODE: Input bar matches capture instruction width, no photo button.
                 textEntryControl
                     .frame(maxWidth: .infinity, alignment: .center)
             } else {
-                // CAMERA MODE: ZStack for perfect centering of Shutter Button
-                ZStack(alignment: .center) {
-                    // Layer 1: Side buttons in HStack
-                    HStack {
-                        Button {
-                            isPhotoPickerPresented = true
-                        } label: {
-                            Image(systemName: "photo.on.rectangle")
-                                .foregroundStyle(.primary)
-                                .font(.system(size: 18, weight: .semibold))
-                                .frame(width: sideSize, height: sideSize)
-                                .liquidGlassButton(in: Circle(), interactive: true)
-                        }
-                        .buttonStyle(.plain)
-                        .photosPicker(isPresented: $isPhotoPickerPresented, selection: $pickedItem, matching: .images)
-                        .onChange(of: pickedItem) { _, newItem in
-                            guard let newItem else { return }
-                            Task {
-                                if let data = try? await newItem.loadTransferable(type: Data.self),
-                                   let ui = UIImage(data: data) {
-                                    await MainActor.run { camera.useImportedPhoto(ui) }
-                                }
-                                await MainActor.run { pickedItem = nil }
-                            }
-                        }
-
-                        Spacer()
-
-                        Button {
-                            switchCameraIfAllowed()
-                        } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .foregroundStyle(.primary)
-                                .font(.system(size: 18, weight: .semibold))
-                                .frame(width: sideSize, height: sideSize)
-                                .liquidGlassButton(in: Circle(), interactive: true)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 24)
-
-                    // Layer 2: Center Shutter (Mathematically centered)
-                    shutterControl
-                }
+                captureUtilityRow
             }
         }
         .frame(maxWidth: .infinity)
@@ -1074,6 +1074,14 @@ struct CameraScreen: View {
         }
     }
 
+    private var locationEntrySection: some View {
+        VStack(spacing: 6) {
+            zipControlsRow
+            locationStatus
+        }
+        .padding(.top, 0)
+    }
+
     private var quotaOverlay: some View {
         ZStack {
             Color.black.opacity(0.6)
@@ -1156,7 +1164,8 @@ struct CameraScreen: View {
             let accessToken = await auth.accessTokenForAPI()
             camera.sendSelectionToOpenAI(
                 location: context,
-                accessToken: accessToken
+                accessToken: accessToken,
+                isProLocal: auth.hasUnlimitedAnalysis
             )
         }
     }
@@ -1288,7 +1297,7 @@ struct CameraScreen: View {
             .frame(maxWidth: .infinity, alignment: .top)
             .padding(.top, 70)
             .padding(.horizontal, 20)
-            .padding(.bottom, bottomBarInset + 160)
+            .padding(.bottom, bottomControlsPadding + 160)
         }
     }
 
@@ -1298,6 +1307,17 @@ struct CameraScreen: View {
                 if camera.capturedImage != nil {
                     Button {
                         handleCapturedCloseButtonTap()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(.primary)
+                            .font(.system(size: 16, weight: .bold))
+                            .frame(width: 42, height: 42)
+                            .liquidGlassButton(in: Circle(), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                } else if isTextEntryActive {
+                    Button {
+                        closeTextEntry()
                     } label: {
                         Image(systemName: "xmark")
                             .foregroundStyle(.primary)
@@ -1341,17 +1361,6 @@ struct CameraScreen: View {
                 if isTextEntryActive {
                     captureControlsRow
                 } else {
-                    if auth.showCaptureInstructions {
-                        zoomPill
-                        captureInstructionBar
-                            .frame(maxWidth: capturePanelMaxWidth)
-                    } else {
-                        zoomPill
-                    }
-                    if shouldShowLocationEntry {
-                        zipControlsRow
-                        locationStatus
-                    }
                     Group {
                         if #available(iOS 26.0, *) {
                             GlassEffectContainer(spacing: 18) {
@@ -1360,6 +1369,9 @@ struct CameraScreen: View {
                         } else {
                             captureControlsRow
                         }
+                    }
+                    if shouldShowLocationEntry {
+                        locationEntrySection
                     }
                 }
             }
@@ -1370,13 +1382,13 @@ struct CameraScreen: View {
     @ViewBuilder
     private var capturedPhotoBottomControls: some View {
         let enabled = camera.isSelected
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             if !camera.isSelected {
                 Text("Tap the item to select it")
-                    .font(AppType.body(14))
+                    .font(AppType.body(15))
                     .foregroundStyle(.primary.opacity(0.8))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 11)
                     .background(.ultraThinMaterial, in: Capsule())
                     .overlay(
                         Capsule().stroke(instructionBorderColor, lineWidth: 1)
@@ -1391,12 +1403,12 @@ struct CameraScreen: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "sparkles")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 16, weight: .bold))
                         Text("Analyze selection")
-                            .font(AppType.title(16))
+                            .font(AppType.title(18))
                     }
                     .foregroundStyle(AppTheme.accentGradient)
-                    .frame(width: 240, height: 60)
+                    .frame(width: 268, height: 68)
                     .liquidGlassButton(
                         in: RoundedRectangle(cornerRadius: 22, style: .continuous),
                         interactive: true
@@ -1412,12 +1424,12 @@ struct CameraScreen: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 16, weight: .bold))
                         Text("Retry")
-                            .font(AppType.title(16))
+                            .font(AppType.title(18))
                     }
                     .foregroundStyle(AppTheme.accentGradient)
-                    .frame(width: 240, height: 60)
+                    .frame(width: 268, height: 68)
                     .liquidGlassButton(
                         in: RoundedRectangle(cornerRadius: 22, style: .continuous),
                         interactive: true
@@ -1426,18 +1438,26 @@ struct CameraScreen: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.bottom, bottomControlsPadding)
+        .padding(.bottom, capturedControlsBottomPadding)
     }
 
     private var bottomControlsOverlay: some View {
-        VStack {
-            Spacer()
-            if camera.capturedImage == nil {
-                liveCameraBottomControls
-            } else {
-                capturedPhotoBottomControls
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if camera.capturedImage == nil {
+                    if !hideNativeBottomControls || isTextEntryActive {
+                        liveCameraBottomControls
+                            .padding(.bottom, isTextEntryActive ? keyboardHeight + 8 : proxy.safeAreaInsets.bottom)
+                    }
+                } else {
+                    capturedPhotoBottomControls
+                        .padding(.bottom, proxy.safeAreaInsets.bottom)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
+        .ignoresSafeArea(.all, edges: .bottom)
         .disabled(captureControlsDisabled)
     }
 
@@ -1492,7 +1512,6 @@ struct CameraScreen: View {
     private func applyLifecycleAndAnimationModifiers<Content: View>(to content: Content) -> some View {
         content
             .onAppear {
-                pulse = !auth.reduceMotionEnabled
                 camera.hapticsEnabled = auth.enableHaptics
                 updateLocationEntryVisibility()
                 applyDefaultZipIfNeeded()
@@ -1509,6 +1528,9 @@ struct CameraScreen: View {
 
     private func applyLocationAndPreferenceObservers<Content: View>(to content: Content) -> some View {
         content
+            .onChange(of: isTextEntryActive) { _, newValue in
+                onTextEntryActiveChange(newValue)
+            }
             .onChange(of: locationManager.postalCode) { _, newValue in
                 handleLocationPostalCodeChange(newValue)
             }
@@ -1527,9 +1549,6 @@ struct CameraScreen: View {
             }
             .onChange(of: auth.preferences.enableHaptics) { _, _ in
                 camera.hapticsEnabled = auth.enableHaptics
-            }
-            .onChange(of: auth.preferences.reduceMotion) { _, _ in
-                pulse = !auth.reduceMotionEnabled
             }
     }
 
@@ -1571,7 +1590,15 @@ struct CameraScreen: View {
 
     private func applySceneObservers<Content: View>(to content: Content) -> some View {
         content
+            .photosPicker(isPresented: $isPhotoPickerPresented, selection: $pickedItem, matching: .images)
+            .onChange(of: pickedItem) { _, newItem in
+                handlePickedItemChange(newItem)
+            }
             .onChange(of: camera.capturedImage) { _, newValue in
+                NotificationCenter.default.post(
+                    name: .reviveCapturePhotoVisibilityChanged,
+                    object: newValue != nil
+                )
                 // Defensive restart to avoid occasional black preview when returning to camera mode.
                 if newValue == nil {
                     camera.startSession()
@@ -1591,6 +1618,42 @@ struct CameraScreen: View {
                     break
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveTriggerCaptureShutter)) { _ in
+                handleShutterTap()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveTriggerCaptureTextEntry)) { _ in
+                handleCaptureButtonHold()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenCaptureLibrary)) { _ in
+                openPhotoLibraryIfAllowed()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveSwitchCaptureCamera)) { _ in
+                switchCameraIfAllowed()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveDismissCaptureTextEntry)) { _ in
+                guard isTextEntryActive else { return }
+                closeTextEntry()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+                guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+                withAnimation(.easeInOut(duration: duration)) { keyboardHeight = frame.height }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { note in
+                let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+                withAnimation(.easeInOut(duration: duration)) { keyboardHeight = 0 }
+            }
+    }
+
+    private func handlePickedItemChange(_ newItem: PhotosPickerItem?) {
+        guard let newItem else { return }
+        Task {
+            if let data = try? await newItem.loadTransferable(type: Data.self),
+               let ui = UIImage(data: data) {
+                await MainActor.run { camera.useImportedPhoto(ui) }
+            }
+            await MainActor.run { pickedItem = nil }
+        }
     }
 
     private func handleLocationPostalCodeChange(_ newValue: String) {

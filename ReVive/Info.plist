@@ -4,6 +4,8 @@
 <dict>
 	<key>EDGE_BASE_URL</key>
 	<string>https://ihwecxhqragogndktrxb.supabase.co/</string>
+	<key>APP_STORE_SUBSCRIPTION_PRODUCT_ID</key>
+	<string>kumar.sidharthram.ReVive.pro.monthly</string>
 	<key>EDGE_ANON_KEY</key>
 	<string>$(EDGE_ANON_KEY)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>

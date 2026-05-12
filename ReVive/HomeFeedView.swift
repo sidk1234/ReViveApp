@@ -422,6 +422,7 @@ struct HomeFeedView: View {
         .sheet(isPresented: $showStreakMenu) {
             StreakMenuView(
                 streak: streakStats,
+                recycledDays: recycledStreakDays,
                 milestones: ChallengeProgression.streakMilestones(),
                 claimedMilestoneDays: ChallengeProgression.claimedStreakMilestoneDays(),
                 onScanNow: {
@@ -559,7 +560,7 @@ struct HomeFeedView: View {
             showStreakMenu = true
         } label: {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top) {
+                HStack(alignment: .center, spacing: 16) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Current Streak")
                             .font(AppType.body(12))
@@ -578,14 +579,7 @@ struct HomeFeedView: View {
 
                     Spacer()
 
-                    ZStack {
-                        Circle()
-                            .fill(Color.orange.opacity(colorScheme == .light ? 0.2 : 0.28))
-                            .frame(width: 48, height: 48)
-                        Image(systemName: "flame.fill")
-                            .font(.system(size: 21, weight: .bold))
-                            .foregroundStyle(Color.orange)
-                    }
+                    StreakFlameBadge(currentDays: streakStats.currentDays, size: 74)
                 }
 
                 Text(streakHeadlineText)
@@ -655,6 +649,15 @@ struct HomeFeedView: View {
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
+        )
+    }
+
+    private var recycledStreakDays: Set<Date> {
+        let calendar = Calendar.current
+        return Set(
+            history.entries
+                .filter { $0.recycleStatus == .recycled }
+                .map { calendar.startOfDay(for: $0.date) }
         )
     }
 
@@ -754,7 +757,9 @@ struct HomeFeedView: View {
     }
 
     private func insightsSection(cardWidth: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let insightCardHeight: CGFloat = 144
+
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Insights")
                 .font(AppType.title(19))
                 .foregroundStyle(.primary)
@@ -762,8 +767,8 @@ struct HomeFeedView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(insightCards) { card in
-                        HomeFeedCard(data: card)
-                            .frame(width: cardWidth, alignment: .leading)
+                        HomeFeedCard(data: card, bodyLineLimit: 3, isCompact: true)
+                            .frame(width: cardWidth, height: insightCardHeight, alignment: .topLeading)
                             .id(card.id)
                     }
                 }
@@ -1465,14 +1470,16 @@ private struct HomeFeedCardData: Identifiable {
 
 private struct HomeFeedCard: View {
     let data: HomeFeedCardData
+    var bodyLineLimit: Int? = nil
+    var isCompact: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: isCompact ? 8 : 10) {
+            HStack(spacing: isCompact ? 8 : 10) {
                 Image(systemName: data.symbol)
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(data.tint)
-                    .frame(width: 26, height: 26)
+                    .frame(width: isCompact ? 24 : 26, height: isCompact ? 24 : 26)
                     .background(
                         Circle()
                             .fill(data.tint.opacity(0.18))
@@ -1491,16 +1498,25 @@ private struct HomeFeedCard: View {
                 }
             }
 
-            Text(data.body)
-                .font(AppType.body(14))
-                .foregroundStyle(.primary.opacity(0.86))
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 1)
+            Group {
+                if let bodyLineLimit {
+                    Text(data.body)
+                        .lineLimit(bodyLineLimit)
+                } else {
+                    Text(data.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(AppType.body(14))
+            .foregroundStyle(.primary.opacity(0.86))
+            .lineSpacing(2)
+            .padding(.vertical, 1)
+
+            Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(isCompact ? 14 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .staticCard(cornerRadius: 22)
+        .staticCard(cornerRadius: isCompact ? 20 : 22)
     }
 }
 
@@ -1669,9 +1685,54 @@ private struct StreakMenuView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let streak: RecycleStreakStats
+    let recycledDays: Set<Date>
     let milestones: [StreakMilestoneReward]
     let claimedMilestoneDays: Set<Int>
     let onScanNow: () -> Void
+
+    private var calendar: Calendar {
+        Calendar.current
+    }
+
+    private var monthAnchor: Date {
+        let now = Date()
+        let components = calendar.dateComponents([.year, .month], from: now)
+        return calendar.date(from: components) ?? now
+    }
+
+    private var weekdaySymbols: [String] {
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let firstIndex = max(calendar.firstWeekday - 1, 0)
+        return Array(symbols[firstIndex...]) + Array(symbols[..<firstIndex])
+    }
+
+    private var calendarColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 8), count: 7)
+    }
+
+    private var monthGridDates: [Date?] {
+        guard let dayRange = calendar.range(of: .day, in: .month, for: monthAnchor) else { return [] }
+
+        let firstWeekday = calendar.component(.weekday, from: monthAnchor)
+        let leadingBlanks = (firstWeekday - calendar.firstWeekday + 7) % 7
+
+        var values = Array<Date?>(repeating: nil, count: leadingBlanks)
+        for day in dayRange {
+            if let date = calendar.date(byAdding: .day, value: day - 1, to: monthAnchor) {
+                values.append(date)
+            }
+        }
+
+        while values.count % 7 != 0 {
+            values.append(nil)
+        }
+
+        return values
+    }
+
+    private var recycledDaysThisMonth: Int {
+        recycledDays.filter { calendar.isDate($0, equalTo: monthAnchor, toGranularity: .month) }.count
+    }
 
     private var streakStatusText: String {
         if streak.currentDays == 0 {
@@ -1691,24 +1752,30 @@ private struct StreakMenuView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Current Streak")
-                                .font(AppType.body(12))
-                                .foregroundStyle(.primary.opacity(0.7))
+                        HStack(alignment: .center, spacing: 18) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Current Streak")
+                                    .font(AppType.body(12))
+                                    .foregroundStyle(.primary.opacity(0.7))
 
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text("\(streak.currentDays)")
-                                    .font(AppType.display(54))
-                                    .foregroundStyle(.primary)
-                                    .monospacedDigit()
-                                Text("days")
-                                    .font(AppType.title(24))
-                                    .foregroundStyle(.primary.opacity(0.9))
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("\(streak.currentDays)")
+                                        .font(AppType.display(54))
+                                        .foregroundStyle(.primary)
+                                        .monospacedDigit()
+                                    Text("days")
+                                        .font(AppType.title(24))
+                                        .foregroundStyle(.primary.opacity(0.9))
+                                }
+
+                                Text(streakStatusText)
+                                    .font(AppType.body(13))
+                                    .foregroundStyle(.primary.opacity(0.82))
                             }
 
-                            Text(streakStatusText)
-                                .font(AppType.body(13))
-                                .foregroundStyle(.primary.opacity(0.82))
+                            Spacer(minLength: 12)
+
+                            StreakFlameBadge(currentDays: streak.currentDays, size: 132)
                         }
                         .padding(18)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1721,6 +1788,8 @@ private struct StreakMenuView: View {
                                 value: nextRewardLabel
                             )
                         }
+
+                        streakCalendarCard
 
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Milestones")
@@ -1762,6 +1831,43 @@ private struct StreakMenuView: View {
         return "All unlocked"
     }
 
+    private var streakCalendarCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Calendar")
+                        .font(AppType.title(18))
+                        .foregroundStyle(.primary)
+                    Text(monthAnchor.formatted(.dateTime.month(.wide).year()))
+                        .font(AppType.body(12))
+                        .foregroundStyle(.primary.opacity(0.66))
+                }
+
+                Spacer()
+
+                Text(recycledDaysThisMonth == 1 ? "1 recycle day" : "\(recycledDaysThisMonth) recycle days")
+                    .font(AppType.body(12))
+                    .foregroundStyle(AppTheme.mint.opacity(0.92))
+            }
+
+            LazyVGrid(columns: calendarColumns, spacing: 10) {
+                ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                    Text(symbol)
+                        .font(AppType.body(11))
+                        .foregroundStyle(.primary.opacity(0.52))
+                        .frame(maxWidth: .infinity)
+                }
+
+                ForEach(Array(monthGridDates.enumerated()), id: \.offset) { _, date in
+                    streakCalendarDayCell(date)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .staticCard(cornerRadius: 16)
+    }
+
     private func streakStatTile(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased())
@@ -1776,6 +1882,34 @@ private struct StreakMenuView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .staticCard(cornerRadius: 16)
+    }
+
+    @ViewBuilder
+    private func streakCalendarDayCell(_ date: Date?) -> some View {
+        if let date {
+            let normalizedDate = calendar.startOfDay(for: date)
+            let isRecycled = recycledDays.contains(normalizedDate)
+            let isToday = calendar.isDateInToday(date)
+
+            ZStack {
+                if isRecycled {
+                    Circle()
+                        .fill(AppTheme.mint)
+                } else if isToday {
+                    Circle()
+                        .stroke(AppTheme.mint.opacity(0.7), lineWidth: 1.5)
+                }
+
+                Text("\(calendar.component(.day, from: date))")
+                    .font(AppType.body(12))
+                    .fontWeight(isRecycled || isToday ? .bold : .regular)
+                    .foregroundStyle(isRecycled ? Color.black : .primary.opacity(0.88))
+            }
+            .frame(height: 34)
+        } else {
+            Color.clear
+                .frame(height: 34)
+        }
     }
 
     private func streakMilestoneRow(_ milestone: StreakMilestoneReward) -> some View {
@@ -1803,6 +1937,113 @@ private struct StreakMenuView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .staticCard(cornerRadius: 16)
+    }
+}
+
+private struct StreakFlameBadge: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let currentDays: Int
+    let size: CGFloat
+
+    private var cappedDays: Double {
+        min(Double(max(currentDays, 0)), 100)
+    }
+
+    private var intensity: Double {
+        min(cappedDays / 30, 1)
+    }
+
+    private var flameScale: CGFloat {
+        CGFloat(0.92 + (intensity * 0.58))
+    }
+
+    private var coreOpacity: Double {
+        0.38 + (intensity * 0.5)
+    }
+
+    private var glowOpacity: Double {
+        if currentDays == 0 {
+            return colorScheme == .light ? 0.12 : 0.18
+        }
+        return colorScheme == .light ? 0.20 + (intensity * 0.18) : 0.24 + (intensity * 0.34)
+    }
+
+    private var emberCount: Int {
+        if currentDays == 0 {
+            return 0
+        }
+        switch currentDays {
+        case ..<3: return 1
+        case ..<7: return 2
+        case ..<14: return 3
+        default: return 4
+        }
+    }
+
+    private var accentColors: [Color] {
+        let ember = Color(red: 1.0, green: 0.73, blue: 0.25)
+        let flame = Color(red: 1.0, green: 0.46, blue: 0.18)
+        let blaze = Color(red: 1.0, green: 0.24, blue: 0.12)
+        if currentDays == 0 {
+            return [
+                Color(red: 0.42, green: 0.42, blue: 0.46),
+                Color(red: 0.14, green: 0.14, blue: 0.16)
+            ]
+        }
+        return intensity > 0.6 ? [ember, flame, blaze] : [ember, flame]
+    }
+
+    private var flameGradient: LinearGradient {
+        LinearGradient(
+            colors: accentColors,
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    var body: some View {
+        ZStack {
+            Image(systemName: "flame.fill")
+                .font(.system(size: size * 0.66, weight: .heavy))
+                .foregroundStyle(flameGradient)
+                .scaleEffect(x: flameScale * 1.2, y: flameScale * 1.32)
+                .opacity(coreOpacity * 0.28)
+                .offset(y: size * 0.03)
+                .blur(radius: size * 0.07)
+
+            if currentDays >= 3 {
+                Image(systemName: "flame.fill")
+                    .font(.system(size: size * 0.66, weight: .heavy))
+                    .foregroundStyle(flameGradient)
+                    .scaleEffect(x: flameScale * 1.14, y: flameScale * 1.24)
+                    .opacity(coreOpacity * 0.45)
+                    .offset(y: size * 0.02)
+                    .blur(radius: size * 0.03)
+            }
+
+            Image(systemName: "flame.fill")
+                .font(.system(size: size * 0.62, weight: .heavy))
+                .foregroundStyle(flameGradient)
+                .scaleEffect(x: flameScale, y: flameScale + CGFloat(intensity * 0.16))
+                .shadow(color: accentColors[0].opacity(glowOpacity), radius: size * 0.12, x: 0, y: size * 0.03)
+
+            ForEach(0..<emberCount, id: \.self) { index in
+                let orbitAngle = Double(index) * (360.0 / Double(max(emberCount, 1))) - 24
+                let radians = orbitAngle * .pi / 180
+                let orbitRadius = size * (0.16 + CGFloat(index) * 0.055)
+                let x = CGFloat(cos(radians)) * orbitRadius
+                let y = (CGFloat(sin(radians)) * orbitRadius) - (size * 0.08)
+
+                Circle()
+                    .fill(accentColors[min(index, accentColors.count - 1)].opacity(0.55 + (intensity * 0.24)))
+                    .frame(width: size * 0.05, height: size * 0.05)
+                    .blur(radius: size * 0.01)
+                    .offset(x: x, y: y)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 

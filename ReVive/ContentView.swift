@@ -21,6 +21,19 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(
+            isPresented: Binding(
+                get: { auth.isShowingPasswordRecovery },
+                set: { isPresented in
+                    if !isPresented {
+                        auth.dismissPasswordRecovery()
+                    }
+                }
+            )
+        ) {
+            PasswordRecoveryView()
+                .environmentObject(auth)
+        }
     }
 }
 

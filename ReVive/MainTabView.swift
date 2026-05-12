@@ -33,122 +33,68 @@ struct MainTabView: View {
     @State private var lastPrimarySelection: Tab = .home
     @State private var didRunInitialSignedInImpactSync = false
     @State private var tutorialShouldReturnHomeOnDismiss = false
+    @State private var isCapturedPhotoActive = false
     @AppStorage("revive.tutorial.mainTabs.didShowMandatory") private var didShowMandatoryMainTabsTutorial = false
     @AppStorage("revive.tutorial.mainTabs.overlayVisible") private var isMainTutorialOverlayActive = false
+    @State private var isKeyboardVisible = false
+    @State private var isCaptureTextEntryActive = false
+    @State private var isCaptureTextResultActive = false
 
     var body: some View {
-        AnyView(baseView)
+        baseView
     }
 
     private var baseView: some View {
-        mainContent
-            .animation(.easeInOut(duration: 0.22), value: showGuestPopup)
-            .animation(.easeInOut(duration: 0.2), value: showResumeOverlay)
-            .animation(.easeInOut(duration: 0.2), value: showTutorialOverlay)
-            .tint(AppTheme.mint)
-            .task {
-                await performInitialGuestQuotaFetch()
-            }
-            .onReceive(
-                NotificationCenter.default.publisher(for: .reviveGuestQuotaUpdated)
-                    .receive(on: RunLoop.main)
-            ) { note in
-                handleGuestQuotaUpdated(note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .reviveRequestSignIn)) { note in
-                handleRequestSignInNotification(note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenHome)) { note in
-                handleOpenHomeNotification(note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenCapture)) { note in
-                handleOpenCaptureNotification(note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenBin)) { note in
-                handleOpenBinNotification(note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .reviveRequestUpgrade)) { note in
-                handleRequestUpgradeNotification(note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenTutorial)) { note in
-                handleOpenTutorialNotification(note)
-            }
-            .onChange(of: showTutorialOverlay) { _, isVisible in
-                handleTutorialVisibilityChange(isVisible)
-            }
-            .onChange(of: selection) { _, newValue in
-                handleSelectionChange(newValue)
-            }
-            .onChange(of: auth.isSignedIn) { _, newValue in
-                handleAuthSignInChange(newValue)
-            }
-            .onChange(of: auth.user?.id ?? "") { _, newValue in
-                handleUserIDChange(newValue)
-            }
-            .onChange(of: auth.session?.accessToken ?? "") { _, token in
-                handleAccessTokenChange(token)
-            }
-            .onAppear {
-                handleOnAppear()
-            }
-            .onChange(of: history.entries) { _, entries in
-                handleHistoryEntriesChange(entries)
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                handleScenePhaseChange(newPhase)
-            }
+        MainTabEventHandlers(
+            showGuestPopup: $showGuestPopup,
+            showResumeOverlay: $showResumeOverlay,
+            showTutorialOverlay: $showTutorialOverlay,
+            selection: $selection,
+            auth: auth,
+            history: history,
+            leaderboard: leaderboard,
+            scenePhase: scenePhase,
+            onPerformInitialGuestQuotaFetch: performInitialGuestQuotaFetch,
+            onGuestQuotaUpdated: handleGuestQuotaUpdated,
+            onRequestSignIn: handleRequestSignInNotification,
+            onOpenHome: handleOpenHomeNotification,
+            onOpenCapture: handleOpenCaptureNotification,
+            onOpenBin: handleOpenBinNotification,
+            onRequestUpgrade: handleRequestUpgradeNotification,
+            onOpenTutorial: handleOpenTutorialNotification,
+            onTutorialVisibilityChange: handleTutorialVisibilityChange,
+            onSelectionChange: handleSelectionChange,
+            onAuthSignInChange: handleAuthSignInChange,
+            onUserIDChange: handleUserIDChange,
+            onAccessTokenChange: handleAccessTokenChange,
+            onCapturePhotoVisibilityChange: handleCapturePhotoVisibilityChange,
+            onAppear: handleOnAppear,
+            onHistoryEntriesChange: handleHistoryEntriesChange,
+            onScenePhaseChange: handleScenePhaseChange
+        ) {
+            mainContent
+        }
     }
 
     private var mainContent: some View {
         ZStack(alignment: .top) {
-            TabView(selection: $selection) {
-                CameraScreen(guestHeaderInset: guestControlInset)
-                    .tabItem {
-                        Label("Capture", systemImage: "camera.fill")
+            MainTabPages(
+                selection: $selection,
+                guestControlInset: guestControlInset,
+                tabButtonFrames: $tabButtonFrames,
+                shouldShowFloatingTabBar: shouldShowFloatingTabBar,
+                onTextEntryActiveChange: { newValue in
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                        isCaptureTextEntryActive = newValue
                     }
-                .tag(Tab.camera)
-
-                NavigationStack {
-                    BinView()
-                }
-                .tabItem {
-                    Label("Bin", systemImage: "trash.fill")
+                },
+                onTextResultActiveChange: { newValue in
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                        isCaptureTextResultActive = newValue
                     }
-                 .tag(Tab.bin)
-
-                NavigationStack {
-                    HomeFeedView()
-                }
-                .tabItem {
-                    Label("Home", systemImage: "house.fill")
-                }
-                .tag(Tab.home)
-
-                LeaderboardView {
-                    selection = .account
-                }
-                .tabItem {
-                    Label("Ranks", systemImage: "trophy.fill")
-                }
-                .tag(Tab.leaderboard)
-
-                AccountView(guestHeaderInset: guestControlInset)
-                    .tabItem {
-                        Label("Account", systemImage: "person.crop.circle.fill")
-                    }
-                    .tag(Tab.account)
-            }
-            .toolbar(.hidden, for: .tabBar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                floatingTabBar
-                    .padding(.horizontal, 16)
-                    .padding(.top, 6)
-                    .padding(.bottom, 6)
-            }
-            .onPreferenceChange(CustomTabFramePreferenceKey.self) { frames in
-                guard !frames.isEmpty else { return }
-                tabButtonFrames = frames
-            }
+                },
+                floatingTabBar: { floatingTabBar }
+            )
 
             if shouldRenderGuestPopup {
                 GuestSignInPopup(
@@ -186,6 +132,16 @@ struct MainTabView: View {
             }
         }
         .coordinateSpace(name: "mainTabSpace")
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) { isKeyboardVisible = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) { isKeyboardVisible = false }
+        }
+    }
+
+    private var shouldShowFloatingTabBar: Bool {
+        !(selection == .camera && isCapturedPhotoActive) && !isKeyboardVisible && !isCaptureTextEntryActive && !isCaptureTextResultActive
     }
 
     private func performInitialGuestQuotaFetch() async {
@@ -249,8 +205,16 @@ struct MainTabView: View {
     private func handleSelectionChange(_ newValue: Tab) {
         if newValue != .camera {
             lastPrimarySelection = newValue
+            isCapturedPhotoActive = false
         }
         handleGuestPopup(for: newValue)
+    }
+
+    private func handleCapturePhotoVisibilityChange(_ isVisible: Bool) {
+        guard selection == .camera else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isCapturedPhotoActive = isVisible
+        }
     }
 
     private func handleAuthSignInChange(_ isSignedIn: Bool) {
@@ -512,96 +476,260 @@ struct MainTabView: View {
         ]
     }
 
-    private var highlightedDockTab: Tab {
-        selection == .camera ? lastPrimarySelection : selection
+    private var floatingTabBarShellShape: FloatingTabBarShellShape {
+        FloatingTabBarShellShape(
+            collapseProgress: 0,
+            minimumTopWidth: 188,
+            cornerRadius: 34
+        )
+    }
+
+    private var floatingTabBarRowShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 30, style: .continuous)
+    }
+
+    private var floatingTabBarItemShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+    }
+
+    private var floatingTabBarShellTint: Color {
+        colorScheme == .light ? AppTheme.night.opacity(0.10) : AppTheme.night.opacity(0.24)
+    }
+
+    private var floatingTabBarRowTint: Color {
+        colorScheme == .light ? AppTheme.night.opacity(0.08) : AppTheme.night.opacity(0.20)
+    }
+
+    private func floatingTabBarItemTint(isSelected: Bool) -> Color {
+        if colorScheme == .light {
+            return isSelected ? Color.white.opacity(0.26) : AppTheme.night.opacity(0.06)
+        }
+        return isSelected ? Color.white.opacity(0.10) : AppTheme.night.opacity(0.18)
+    }
+
+    private var activeTabSelectionBubble: some View {
+        floatingTabBarItemShape
+            .fill(Color.white.opacity(colorScheme == .light ? 0.26 : 0.15))
+            .overlay(
+                floatingTabBarItemShape
+                    .fill(Color.black.opacity(colorScheme == .light ? 0.06 : 0.12))
+            )
+            .overlay(
+                floatingTabBarItemShape
+                    .stroke(Color.white.opacity(colorScheme == .light ? 0.58 : 0.28), lineWidth: 1)
+            )
+            .liquidGlassBackground(
+                in: floatingTabBarItemShape,
+                interactive: true,
+                tint: floatingTabBarItemTint(isSelected: true)
+            )
+            .shadow(color: Color.black.opacity(colorScheme == .light ? 0.12 : 0.30), radius: 10, x: 0, y: 6)
+    }
+
+    private var inactiveCaptureBubble: some View {
+        floatingTabBarItemShape
+            .fill(Color.white.opacity(0.12))
+            .overlay(
+                floatingTabBarItemShape
+                    .fill(Color.black.opacity(0.10))
+            )
+            .overlay(
+                floatingTabBarItemShape
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+            )
+            .liquidGlassBackground(
+                in: floatingTabBarItemShape,
+                interactive: true,
+                tint: floatingTabBarItemTint(isSelected: false)
+            )
     }
 
     private var floatingTabBar: some View {
-        VStack(spacing: 12) {
-            captureTabButton
-
-            HStack(spacing: 8) {
-                ForEach(dockTabs) { item in
-                    primaryTabButton(item)
-                }
+        VStack(spacing: 6) {
+            if selection == .camera && auth.showCaptureInstructions && !isCapturedPhotoActive {
+                Text("Press capture to scan or hold to type an item")
+                    .font(AppType.body(12))
+                    .foregroundStyle(.primary.opacity(0.65))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            .padding(8)
+
+            VStack(spacing: 8) {
+                // Full camera controls — only visible on camera tab
+                if selection == .camera {
+                    captureActionRow
+                        .transition(.opacity)
+                }
+
+                // Nav row — compact 5-button row on non-camera, 4-button row on camera
+                HStack(spacing: 8) {
+                    primaryTabButton(dockTabs[0]) // Home
+                    primaryTabButton(dockTabs[1]) // Bin
+                    if selection != .camera {
+                        compactCaptureNavButton
+                            .transition(.opacity)
+                    }
+                    primaryTabButton(dockTabs[2]) // Ranks
+                    primaryTabButton(dockTabs[3]) // Account
+                }
+                .padding(.horizontal, 8)
+            }
+            .animation(.easeInOut(duration: 0.2), value: selection == .camera)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .frame(maxWidth: 520)
+            .frame(maxWidth: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .fill(Color.black.opacity(colorScheme == .light ? 0.26 : 0.40))
+                floatingTabBarShellShape
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        floatingTabBarShellShape
+                            .fill(Color.black.opacity(colorScheme == .light ? 0.18 : 0.35))
+                    )
+                    .liquidGlassBackground(
+                        in: floatingTabBarShellShape,
+                        tint: floatingTabBarShellTint
+                    )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .stroke(Color.white.opacity(colorScheme == .light ? 0.28 : 0.20), lineWidth: 1)
+                floatingTabBarShellShape
+                    .stroke(Color.white.opacity(colorScheme == .light ? 0.32 : 0.18), lineWidth: 1)
             )
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
-        .frame(maxWidth: 520)
-        .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 34, style: .continuous)
-                        .fill(Color.black.opacity(colorScheme == .light ? 0.18 : 0.35))
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .stroke(Color.white.opacity(colorScheme == .light ? 0.32 : 0.18), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(colorScheme == .light ? 0.18 : 0.38), radius: 16, x: 0, y: 10)
-        .background(alignment: .bottom) {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [AppTheme.emerald.opacity(0.45), .clear],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 125
-                    )
-                )
-                .frame(width: 260, height: 120)
-                .offset(y: 50)
-                .allowsHitTesting(false)
+            .shadow(color: Color.black.opacity(colorScheme == .light ? 0.18 : 0.38), radius: 16, x: 0, y: 10)
         }
     }
 
-    private var captureTabButton: some View {
-        let isSelected = selection == .camera
-
-        return Button {
+    private var compactCaptureNavButton: some View {
+        Button {
             withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
                 selection = .camera
             }
         } label: {
-            HStack(spacing: 8) {
+            VStack(spacing: 4) {
                 Image(systemName: "camera.fill")
-                    .font(.system(size: 14, weight: .semibold))
-
+                    .font(.system(size: 18, weight: .semibold))
                 Text("Capture")
-                    .font(AppType.title(16))
+                    .font(AppType.body(13))
             }
-            .foregroundStyle(.white.opacity(isSelected ? 1 : 0.9))
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(isSelected ? 0.22 : 0.12))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(Color.white.opacity(isSelected ? 0.42 : 0.22), lineWidth: 1)
-            )
+            .foregroundStyle(.white.opacity(0.85))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .background(tabFrameReporter(for: .camera))
+    }
+
+    private var captureActionRow: some View {
+        ZStack {
+            HStack {
+                captureContextButton(
+                    systemName: "photo.on.rectangle",
+                    label: "Library",
+                    action: {
+                        NotificationCenter.default.post(name: .reviveOpenCaptureLibrary, object: nil)
+                    }
+                )
+
+                Spacer(minLength: 0)
+
+                captureContextButton(
+                    systemName: "arrow.triangle.2.circlepath",
+                    label: "Flip camera",
+                    action: {
+                        NotificationCenter.default.post(name: .reviveSwitchCaptureCamera, object: nil)
+                    }
+                )
+            }
+            .padding(.horizontal, 4)
+
+            captureTabButton
+        }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 52)
+    }
+
+    private func captureContextButton(
+        systemName: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isVisible = selection == .camera
+
+        return Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.94))
+                .frame(width: 46, height: 46)
+                .liquidGlassButton(in: Circle(), interactive: isVisible)
+        }
+        .buttonStyle(.plain)
+        .opacity(isVisible ? 1 : 0)
+        .scaleEffect(isVisible ? 1 : 0.92)
+        .allowsHitTesting(isVisible)
+        .accessibilityHidden(!isVisible)
+        .accessibilityLabel(label)
+        .animation(.easeInOut(duration: 0.18), value: isVisible)
+    }
+
+    private var captureTabButton: some View {
+        let isSelected = selection == .camera
+        let tap = TapGesture().onEnded {
+            if isSelected {
+                NotificationCenter.default.post(name: .reviveTriggerCaptureShutter, object: nil)
+            } else {
+                withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                    selection = .camera
+                }
+            }
+        }
+        let longPress = LongPressGesture(minimumDuration: 0.45, maximumDistance: 50).onEnded { _ in
+            if isSelected {
+                // Defer so the gesture cycle fully completes before triggering state changes
+                // that remove this view from the hierarchy (keyboard/tab bar interaction).
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .reviveTriggerCaptureTextEntry, object: nil)
+                }
+            } else {
+                withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                    selection = .camera
+                }
+            }
+        }
+        let gesture = longPress.exclusively(before: tap)
+
+        return HStack(spacing: 8) {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 14, weight: .semibold))
+
+            Text("Capture")
+                .font(AppType.title(16))
+        }
+        .foregroundStyle(.white.opacity(isSelected ? 1 : 0.9))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background {
+            if isSelected {
+                activeTabSelectionBubble
+                    .matchedGeometryEffect(id: "main.tab.selection", in: tabSelectionNamespace)
+            } else {
+                inactiveCaptureBubble
+            }
+        }
+        .contentShape(Capsule(style: .continuous))
+        .gesture(gesture)
+        .accessibilityElement()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Capture")
+        .accessibilityHint("Tap to take a photo. Hold to type an item.")
         .background(tabFrameReporter(for: .camera))
     }
 
     private func primaryTabButton(_ item: DockTabItem) -> some View {
-        let isSelected = highlightedDockTab == item.tab
+        let isSelected = selection == item.tab
 
         return Button {
             withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
@@ -619,18 +747,14 @@ struct MainTabView: View {
             .padding(.vertical, 12)
             .background {
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(Color.white.opacity(colorScheme == .light ? 0.26 : 0.15))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                .stroke(Color.white.opacity(colorScheme == .light ? 0.58 : 0.28), lineWidth: 1)
-                        )
-                        .shadow(color: Color.black.opacity(colorScheme == .light ? 0.12 : 0.30), radius: 10, x: 0, y: 6)
+                    activeTabSelectionBubble
                         .matchedGeometryEffect(id: "main.tab.selection", in: tabSelectionNamespace)
                 }
             }
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
         .background(tabFrameReporter(for: item.tab))
     }
 
@@ -641,6 +765,130 @@ struct MainTabView: View {
                 value: [tab: proxy.frame(in: .named("mainTabSpace"))]
             )
         }
+    }
+}
+
+
+private struct MainTabPages<FloatingBar: View>: View {
+    @Binding var selection: MainTabView.Tab
+    let guestControlInset: CGFloat
+    @Binding var tabButtonFrames: [MainTabView.Tab: CGRect]
+    let shouldShowFloatingTabBar: Bool
+    let onTextEntryActiveChange: (Bool) -> Void
+    let onTextResultActiveChange: (Bool) -> Void
+    @ViewBuilder let floatingTabBar: () -> FloatingBar
+
+    var body: some View {
+        TabView(selection: $selection) {
+            CameraScreen(
+                guestHeaderInset: guestControlInset,
+                hideNativeBottomControls: true,
+                onTextEntryActiveChange: onTextEntryActiveChange,
+                onTextResultActiveChange: onTextResultActiveChange
+            )
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { Label("Capture", systemImage: "camera.fill") }
+                .tag(MainTabView.Tab.camera)
+
+            NavigationStack { BinView() }
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { Label("Bin", systemImage: "trash.fill") }
+                .tag(MainTabView.Tab.bin)
+
+            NavigationStack { HomeFeedView() }
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { Label("Home", systemImage: "house.fill") }
+                .tag(MainTabView.Tab.home)
+
+            LeaderboardView { selection = .account }
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { Label("Ranks", systemImage: "trophy.fill") }
+                .tag(MainTabView.Tab.leaderboard)
+
+            AccountView(guestHeaderInset: guestControlInset)
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { Label("Account", systemImage: "person.crop.circle.fill") }
+                .tag(MainTabView.Tab.account)
+        }
+        .toolbar(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if shouldShowFloatingTabBar {
+                floatingTabBar()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 0)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .onPreferenceChange(CustomTabFramePreferenceKey.self) { frames in
+            guard !frames.isEmpty else { return }
+            tabButtonFrames = frames
+        }
+    }
+}
+
+private struct MainTabEventHandlers<Content: View>: View {
+    @Binding var showGuestPopup: Bool
+    @Binding var showResumeOverlay: Bool
+    @Binding var showTutorialOverlay: Bool
+    @Binding var selection: MainTabView.Tab
+
+    let auth: AuthStore
+    let history: HistoryStore
+    let leaderboard: LeaderboardStore
+    let scenePhase: ScenePhase
+
+    let onPerformInitialGuestQuotaFetch: () async -> Void
+    let onGuestQuotaUpdated: (Notification) -> Void
+    let onRequestSignIn: (Notification) -> Void
+    let onOpenHome: (Notification) -> Void
+    let onOpenCapture: (Notification) -> Void
+    let onOpenBin: (Notification) -> Void
+    let onRequestUpgrade: (Notification) -> Void
+    let onOpenTutorial: (Notification) -> Void
+    let onTutorialVisibilityChange: (Bool) -> Void
+    let onSelectionChange: (MainTabView.Tab) -> Void
+    let onAuthSignInChange: (Bool) -> Void
+    let onUserIDChange: (String) -> Void
+    let onAccessTokenChange: (String) -> Void
+    let onCapturePhotoVisibilityChange: (Bool) -> Void
+    let onAppear: () -> Void
+    let onHistoryEntriesChange: ([HistoryEntry]) -> Void
+    let onScenePhaseChange: (ScenePhase) -> Void
+
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        let base = content()
+            .animation(.easeInOut(duration: 0.22), value: showGuestPopup)
+            .animation(.easeInOut(duration: 0.2), value: showResumeOverlay)
+            .animation(.easeInOut(duration: 0.2), value: showTutorialOverlay)
+            .tint(AppTheme.mint)
+            .task { await onPerformInitialGuestQuotaFetch() }
+        let withNotifications = base
+            .onReceive(
+                NotificationCenter.default.publisher(for: .reviveGuestQuotaUpdated)
+                    .receive(on: RunLoop.main)
+            ) { note in onGuestQuotaUpdated(note) }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveRequestSignIn)) { note in onRequestSignIn(note) }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenHome)) { note in onOpenHome(note) }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenCapture)) { note in onOpenCapture(note) }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveCapturePhotoVisibilityChanged)) { note in
+                onCapturePhotoVisibilityChange((note.object as? Bool) ?? false)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenBin)) { note in onOpenBin(note) }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveRequestUpgrade)) { note in onRequestUpgrade(note) }
+            .onReceive(NotificationCenter.default.publisher(for: .reviveOpenTutorial)) { note in onOpenTutorial(note) }
+        return withNotifications
+            .onChange(of: showTutorialOverlay) { _, isVisible in onTutorialVisibilityChange(isVisible) }
+            .onChange(of: selection) { _, newValue in onSelectionChange(newValue) }
+            .onChange(of: auth.isSignedIn) { _, newValue in onAuthSignInChange(newValue) }
+            .onChange(of: auth.user?.id ?? "") { _, newValue in onUserIDChange(newValue) }
+            .onChange(of: auth.session?.accessToken ?? "") { _, token in onAccessTokenChange(token) }
+            .onChange(of: auth.user?.displayName ?? "") { _, _ in leaderboard.refreshNow() }
+            .onAppear { onAppear() }
+            .onChange(of: history.entries) { _, entries in onHistoryEntriesChange(entries) }
+            .onChange(of: scenePhase) { _, newPhase in onScenePhaseChange(newPhase) }
     }
 }
 
@@ -944,11 +1192,88 @@ private struct DockTabItem: Identifiable {
     var id: MainTabView.Tab { tab }
 }
 
+private struct FloatingTabBarShellShape: Shape {
+    var collapseProgress: CGFloat
+    var minimumTopWidth: CGFloat
+    var cornerRadius: CGFloat
+
+    var animatableData: CGFloat {
+        get { collapseProgress }
+        set { collapseProgress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let safeMinimumTopWidth = max(0, min(minimumTopWidth, rect.width - 24))
+        let topInset = max(0, ((rect.width - safeMinimumTopWidth) * 0.5) * collapseProgress)
+        let topLeftX = rect.minX + topInset
+        let topRightX = rect.maxX - topInset
+        let bottomRadius = min(cornerRadius, min(rect.width, rect.height) * 0.5)
+        let topRadius = min(bottomRadius, (topRightX - topLeftX) * 0.5)
+        let shoulderRadius = min(bottomRadius, topInset)
+        let shoulderStartFraction: CGFloat = 0.22
+        let minimumShoulderClearance: CGFloat = 1
+        let shoulderY = min(
+            rect.maxY - bottomRadius - shoulderRadius - 6,
+            max(rect.minY + topRadius + shoulderRadius + minimumShoulderClearance, rect.minY + (rect.height * shoulderStartFraction))
+        )
+
+        var path = Path()
+        path.move(to: CGPoint(x: topLeftX + topRadius, y: rect.minY))
+        path.addLine(to: CGPoint(x: topRightX - topRadius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: topRightX, y: rect.minY + topRadius),
+            control: CGPoint(x: topRightX, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: topRightX, y: shoulderY - shoulderRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: topRightX + shoulderRadius, y: shoulderY),
+            control: CGPoint(x: topRightX, y: shoulderY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - shoulderRadius, y: shoulderY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: shoulderY + shoulderRadius),
+            control: CGPoint(x: rect.maxX, y: shoulderY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - bottomRadius, y: rect.maxY),
+            control: CGPoint(x: rect.maxX, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX + bottomRadius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: rect.maxY - bottomRadius),
+            control: CGPoint(x: rect.minX, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX, y: shoulderY + shoulderRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + shoulderRadius, y: shoulderY),
+            control: CGPoint(x: rect.minX, y: shoulderY)
+        )
+        path.addLine(to: CGPoint(x: topLeftX - shoulderRadius, y: shoulderY))
+        path.addQuadCurve(
+            to: CGPoint(x: topLeftX, y: shoulderY - shoulderRadius),
+            control: CGPoint(x: topLeftX, y: shoulderY)
+        )
+        path.addLine(to: CGPoint(x: topLeftX, y: rect.minY + topRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: topLeftX + topRadius, y: rect.minY),
+            control: CGPoint(x: topLeftX, y: rect.minY)
+        )
+        return path
+    }
+}
+
 private struct CustomTabFramePreferenceKey: PreferenceKey {
     static var defaultValue: [MainTabView.Tab: CGRect] = [:]
 
     static func reduce(value: inout [MainTabView.Tab: CGRect], nextValue: () -> [MainTabView.Tab: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct IdentityModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
     }
 }
 

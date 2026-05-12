@@ -35,6 +35,9 @@ struct ReViveApp: App {
                     if GIDSignIn.sharedInstance.handle(url) {
                         return
                     }
+                    if authStore.handleIncomingURL(url) {
+                        return
+                    }
                     guard url.scheme?.lowercased() == "revive",
                           url.host?.lowercased() == "billing"
                     else { return }

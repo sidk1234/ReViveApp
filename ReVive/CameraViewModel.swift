@@ -299,6 +299,10 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         }
         noItemDetected = false
         isSelected = false
+        aiIsLoading = false
+        aiParsedResult = nil
+        aiErrorText = nil
+        aiResultText = nil
         output.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
     }
 
@@ -333,7 +337,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
     
     @MainActor
-    func sendSelectionToOpenAI(location: LocationContext, accessToken: String?) {
+    func sendSelectionToOpenAI(location: LocationContext, accessToken: String?, isProLocal: Bool = false) {
         guard isSelected else { return }
         let requestID = UUID()
         latestAnalysisRequestID = requestID
@@ -380,7 +384,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                     image: imageToSend,
                     itemText: nil,
                     location: location,
-                    accessToken: accessToken
+                    accessToken: accessToken,
+                    isProLocal: isProLocal
                 )
                 let parsed = self.parseResponse(text, locationContext: location)
                 await MainActor.run {
@@ -411,7 +416,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     }
 
     @MainActor
-    func sendTextToOpenAI(itemText: String, location: LocationContext, accessToken: String?) {
+    func sendTextToOpenAI(itemText: String, location: LocationContext, accessToken: String?, isProLocal: Bool = false) {
         let trimmed = itemText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let requestID = UUID()
@@ -427,7 +432,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
                 let text = try await analyzeTextWithRetry(
                     itemText: trimmed,
                     location: location,
-                    accessToken: accessToken
+                    accessToken: accessToken,
+                    isProLocal: isProLocal
                 )
                 let parsed = self.parseResponse(text, locationContext: location)
                 await MainActor.run {
@@ -627,6 +633,10 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
     func useImportedPhoto(_ image: UIImage) {
         noItemDetected = false
         isSelected = false
+        aiIsLoading = false
+        aiParsedResult = nil
+        aiErrorText = nil
+        aiResultText = nil
         glowImage = nil
         fillImage = nil
         instanceMasks = []
@@ -946,7 +956,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             material: "unknown",
             recyclable: false,
             bin: DisposalBin.landfill.rawValue,
-            notes: "This item is not accepted in curbside recycling.",
+            notes: "It isn't accepted in curbside recycling.",
             carbonSavedKg: 0
         )
         return sanitizeResult(fallback, fallbackText: text, locationContext: locationContext)
@@ -956,25 +966,29 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         image: UIImage,
         itemText: String?,
         location: LocationContext,
-        accessToken: String?
+        accessToken: String?,
+        isProLocal: Bool = false
     ) async throws -> String {
         return try await openAI.analyzeImage(
             image: image,
             itemText: itemText,
             location: location,
-            accessToken: accessToken
+            accessToken: accessToken,
+            isProLocal: isProLocal
         )
     }
 
     private func analyzeTextWithRetry(
         itemText: String,
         location: LocationContext,
-        accessToken: String?
+        accessToken: String?,
+        isProLocal: Bool = false
     ) async throws -> String {
         return try await openAI.analyzeText(
             itemText: itemText,
             location: location,
-            accessToken: accessToken
+            accessToken: accessToken,
+            isProLocal: isProLocal
         )
     }
 
@@ -1239,7 +1253,9 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
             ?? fallbackMap["CARBON"]
             ?? fallbackMap["CO2_SAVED"]
 
-        let baseNotes = sanitizedField(primary: result.notes, fallback: fallbackNotes, defaultValue: "No special prep.", avoidUnknownIfPossible: false)
+        let baseNotes = normalizedGenericLeadIn(
+            sanitizedField(primary: result.notes, fallback: fallbackNotes, defaultValue: "No special prep.", avoidUnknownIfPossible: false)
+        )
         let sanitizedItem = sanitizedField(primary: result.item, fallback: fallbackItem, defaultValue: "unknown", avoidUnknownIfPossible: false)
         let sanitizedMaterial = sanitizedField(primary: result.material, fallback: fallbackMaterial, defaultValue: "Mixed material", avoidUnknownIfPossible: false)
         let parsedBin = DisposalBin.from(
@@ -1500,26 +1516,42 @@ final class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDe
         bin: DisposalBin,
         location: String? = nil
     ) -> String {
-        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedReason = normalizedGenericLeadIn(reason.trimmingCharacters(in: .whitespacesAndNewlines))
         let lower = trimmedReason.lowercased()
         let reasonSentence: String
-        if lower.hasPrefix("this item") {
+        if lower.hasPrefix("it ") || lower == "it" {
             reasonSentence = trimmedReason.hasSuffix(".") ? trimmedReason : "\(trimmedReason)."
         } else if bin == .eWaste {
-            reasonSentence = "This item needs e-waste handling and should not go in curbside bins."
+            reasonSentence = "It needs e-waste handling and should not go in curbside bins."
         } else if bin == .hazardousWaste {
-            reasonSentence = "This item needs hazardous-waste handling and should not go in curbside bins."
+            reasonSentence = "It needs hazardous-waste handling and should not go in curbside bins."
         } else if bin == .donation {
-            reasonSentence = "This item is better suited for donation or reuse instead of disposal."
+            reasonSentence = "It is better suited for donation or reuse instead of disposal."
         } else if trimmedReason.isEmpty {
-            reasonSentence = "This item isn't accepted in curbside recycling."
+            reasonSentence = "It isn't accepted in curbside recycling."
         } else {
-            reasonSentence = "This item \(trimmedReason)."
+            reasonSentence = "It \(trimmedReason)."
         }
         if let location = location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
             return "\(reasonSentence) \(location)"
         }
         return reasonSentence
+    }
+
+    private func normalizedGenericLeadIn(_ text: String) -> String {
+        var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return normalized }
+        normalized = normalized.replacingOccurrences(
+            of: "(?i)^this item\\b",
+            with: "It",
+            options: .regularExpression
+        )
+        normalized = normalized.replacingOccurrences(
+            of: "(?i)^the item\\b",
+            with: "It",
+            options: .regularExpression
+        )
+        return normalized
     }
 
     private func isLikelyAddress(_ text: String) -> Bool {

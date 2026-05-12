@@ -10,6 +10,7 @@ import CryptoKit
 import GoogleSignIn
 import Security
 import Combine
+import StoreKit
 
 // MARK: - Logging
 
@@ -28,6 +29,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     @Published var isAdmin: Bool = false
     @Published var photoStorageEnabled: Bool = false
     @Published var preferences: UserPreferences = .default
+    @Published var isShowingPasswordRecovery: Bool = false
     @Published var guestQuota: GuestQuota? {
         didSet {
             saveGuestQuota(guestQuota)
@@ -38,11 +40,15 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     @Published private(set) var signedInQuotaRemaining: Int?
     @Published private(set) var guestQuotaLimit: Int = 5
     @Published private(set) var signedInFreeQuotaLimit: Int = 25
-    @Published private(set) var proMonthlyPriceCents: Int = 500
+    @Published private(set) var proMonthlyPriceCents: Int = 199
     @Published private(set) var proBillingURL: String?
     @Published private(set) var proPortalURL: String?
     @Published private(set) var shouldOfferTutorialAfterSignup: Bool = false
     @Published private(set) var lastKnownSignedInUserID: String?
+    @Published private(set) var subscriptionProduct: Product?
+    @Published private(set) var isLoadingSubscriptionProduct: Bool = false
+    @Published private(set) var isPurchasingSubscription: Bool = false
+    @Published private(set) var isRestoringPurchases: Bool = false
 
     var displayErrorMessage: String? {
         guard let message = errorMessage, !message.isEmpty else { return nil }
@@ -120,6 +126,10 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     private var needsProfileRefresh = false
     private var didAttemptGoogleRestore = false
     private var activePreferencesScope: PreferencesScope = .guest
+    private var transactionUpdatesTask: Task<Void, Never>?
+    private var lastMirroredSubscriptionState: (userID: String, isActive: Bool)?
+    private var passwordRecoverySession: SupabaseSession?
+    private var passwordRecoveryPreviousSession: SupabaseSession?
 
     private enum PreferencesScope: Equatable {
         case guest
@@ -151,6 +161,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     override init() {
         super.init()
         bindRuntimeNotifications()
+        startTransactionUpdatesListener()
         loadPreferences()
         loadGuestQuota()
         shouldOfferTutorialAfterSignup = UserDefaults.standard.bool(forKey: tutorialOfferKey)
@@ -164,6 +175,18 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
 
         restoreSession()
+        Task { @MainActor [weak self] in
+            await self?.loadSubscriptionProduct()
+            _ = await self?.reconcileStoreKitSubscriptionState(syncToSupabase: false)
+        }
+    }
+
+    var isStoreKitSubscriptionConfigured: Bool {
+        BootstrapConfig.appStoreSubscriptionProductID != nil
+    }
+
+    var subscriptionDisplayPrice: String? {
+        subscriptionProduct?.displayPrice
     }
 
     private func loadGuestQuota() {
@@ -221,33 +244,33 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     }
 
     var signedInQuotaLimit: Int { signedInFreeQuotaLimit }
-    var hasUnlimitedAnalysis: Bool { isSignedIn && hasActiveSubscription }
+    var hasUnlimitedAnalysis: Bool { hasActiveSubscription }
 
     var remainingAnalysisRequests: Int? {
-        if !isSignedIn {
-            return guestQuota?.remaining
-        }
         if hasUnlimitedAnalysis {
             return nil
+        }
+        if !isSignedIn {
+            return guestQuota?.remaining
         }
         return signedInQuotaRemaining
     }
 
     var isAnalysisQuotaExhausted: Bool {
+        if hasUnlimitedAnalysis { return false }
         guard isSignedIn else {
             return (guestQuota?.remaining ?? 0) <= 0
         }
-        if hasUnlimitedAnalysis { return false }
         guard let signedInQuotaRemaining else { return false }
         return signedInQuotaRemaining <= 0
     }
 
     @discardableResult
     func consumeAnalysisRequest() -> Bool {
+        if hasUnlimitedAnalysis { return true }
         if !isSignedIn {
             return !isAnalysisQuotaExhausted
         }
-        if hasUnlimitedAnalysis { return true }
         let current = max(0, signedInQuotaRemaining ?? signedInFreeQuotaLimit)
         guard current > 0 else {
             signedInQuotaRemaining = 0
@@ -315,9 +338,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             object: nil,
             queue: .main
         ) { [weak self] note in
-            guard let self, self.isSignedIn else { return }
-            guard let update = note.object as? SignedInQuotaUpdate else { return }
-            self.applySignedInQuotaUpdate(update)
+            MainActor.assumeIsolated {
+                guard let self, self.isSignedIn else { return }
+                guard let update = note.object as? SignedInQuotaUpdate else { return }
+                self.applySignedInQuotaUpdate(update)
+            }
         }
         notificationObservers.append(token)
     }
@@ -344,6 +369,10 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     func applyConfigIfAvailable() {
         guard supabase != nil else { return }
         refreshAppSettings()
+        Task { @MainActor [weak self] in
+            await self?.loadSubscriptionProduct()
+            _ = await self?.reconcileStoreKitSubscriptionState()
+        }
         if !isSignedIn {
             refreshGuestQuota()
         }
@@ -356,6 +385,87 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         if !didAttemptGoogleRestore {
             didAttemptGoogleRestore = true
             restoreGoogleSignIn()
+        }
+    }
+
+    func loadSubscriptionProduct(force: Bool = false) async {
+        guard let productID = BootstrapConfig.appStoreSubscriptionProductID else {
+            subscriptionProduct = nil
+            return
+        }
+        if !force, subscriptionProduct?.id == productID {
+            return
+        }
+
+        isLoadingSubscriptionProduct = true
+        defer { isLoadingSubscriptionProduct = false }
+
+        do {
+            subscriptionProduct = try await fetchSubscriptionProduct(productID: productID)
+        } catch {
+            subscriptionProduct = nil
+            AuthLog.warn("Failed to load App Store product \(productID): \(error.localizedDescription)")
+        }
+    }
+
+    func purchaseSubscription() async throws {
+        guard let productID = BootstrapConfig.appStoreSubscriptionProductID else {
+            throw StoreSubscriptionError.missingProductConfiguration
+        }
+
+        if subscriptionProduct?.id != productID {
+            subscriptionProduct = nil
+        }
+
+        if subscriptionProduct == nil {
+            subscriptionProduct = try await fetchSubscriptionProduct(productID: productID)
+        }
+
+        guard let product = subscriptionProduct else {
+            throw StoreSubscriptionError.productLookupFailed(
+                productID: productID,
+                reason: "Product reference was nil after lookup.",
+                code: "IAP-LOOKUP-NIL"
+            )
+        }
+
+        isPurchasingSubscription = true
+        defer { isPurchasingSubscription = false }
+
+        var purchaseOptions: Set<Product.PurchaseOption> = []
+        if let userID = user?.id, let accountUUID = UUID(uuidString: userID) {
+            purchaseOptions.insert(.appAccountToken(accountUUID))
+        }
+        let result = try await product.purchase(options: purchaseOptions)
+        switch result {
+        case .success(let verification):
+            let transaction = try verifiedTransaction(from: verification)
+            await transaction.finish()
+            let isActive = isTransactionEntitled(transaction)
+            _ = await reconcileStoreKitSubscriptionState()
+            if !isActive {
+                throw StoreSubscriptionError.inactiveEntitlement
+            }
+        case .pending:
+            throw StoreSubscriptionError.pending
+        case .userCancelled:
+            throw StoreSubscriptionError.userCancelled
+        @unknown default:
+            throw StoreSubscriptionError.unknown
+        }
+    }
+
+    func restorePurchases() async throws {
+        isRestoringPurchases = true
+        defer { isRestoringPurchases = false }
+
+        try await AppStore.sync()
+        let state = await reconcileStoreKitSubscriptionState()
+        guard let hasActiveSubscription = state else {
+            throw StoreSubscriptionError.missingProductConfiguration
+        }
+        guard hasActiveSubscription else {
+            throw StoreSubscriptionError.noActiveSubscriptionToRestore
         }
     }
 
@@ -654,7 +764,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                         if lowercased.contains("already exists")
                             || lowercased.contains("already registered")
                             || lowercased.contains("user exists") {
-                            self.errorMessage = "An account already exists for this email. Please sign in instead."
+                            self.errorMessage = "This email has already been used. Please sign in instead."
                             return
                         }
                     }
@@ -682,7 +792,99 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
 
         do {
-            try await supabase.sendPasswordReset(email: trimmedEmail)
+            try await supabase.sendPasswordReset(
+                email: trimmedEmail,
+                redirectURL: passwordRecoveryRedirectURL()
+            )
+            return true
+        } catch {
+            errorMessage = readableAuthError(error, provider: "email")
+            return false
+        }
+    }
+
+    func handleIncomingURL(_ url: URL) -> Bool {
+        guard let supabase else { return false }
+
+        let items = incomingURLItems(url)
+        let callbackType = items["type"]?.lowercased()
+        let isRecovery = callbackType == "recovery" || url.path.lowercased().contains("reset-password")
+        guard isRecovery else { return false }
+
+        guard let recoverySession = supabase.parseOAuthCallback(url) else {
+            errorMessage = "This password reset link is invalid or has expired."
+            isShowingPasswordRecovery = false
+            passwordRecoverySession = nil
+            passwordRecoveryPreviousSession = nil
+            return false
+        }
+
+        passwordRecoveryPreviousSession = session
+        session = recoverySession
+        saveSession(recoverySession)
+        passwordRecoverySession = recoverySession
+        errorMessage = nil
+        isShowingPasswordRecovery = true
+        return true
+    }
+
+    func dismissPasswordRecovery() {
+        isShowingPasswordRecovery = false
+        passwordRecoverySession = nil
+        if let previousSession = passwordRecoveryPreviousSession {
+            session = previousSession
+            saveSession(previousSession)
+        } else {
+            clearSession()
+            refreshGuestQuota()
+        }
+        passwordRecoveryPreviousSession = nil
+    }
+
+    func completePasswordRecovery(newPassword: String, confirmPassword: String) async -> Bool {
+        guard let supabase else {
+            let diag = SupabaseConfig.diagnostics()
+            AuthLog.error("completePasswordRecovery aborted: Missing Supabase config. \(diag.summary)")
+            errorMessage = "Supabase config missing: \(diag.short)."
+            return false
+        }
+        guard let recoverySession = passwordRecoverySession else {
+            errorMessage = "Start password reset again. This recovery session is no longer active."
+            return false
+        }
+
+        let trimmedPassword = newPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedConfirm = confirmPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPassword.isEmpty else {
+            errorMessage = "Enter a new password."
+            return false
+        }
+        guard trimmedPassword == trimmedConfirm else {
+            errorMessage = "Passwords do not match."
+            return false
+        }
+        guard trimmedPassword.count >= 6 else {
+            errorMessage = "Password must be at least 6 characters."
+            return false
+        }
+
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            try await supabase.updateAuthUser(
+                email: nil,
+                password: trimmedPassword,
+                accessToken: recoverySession.accessToken
+            )
+            session = recoverySession
+            saveSession(recoverySession)
+            guestQuota = nil
+            passwordRecoverySession = nil
+            passwordRecoveryPreviousSession = nil
+            isShowingPasswordRecovery = false
+            await loadUserAndProfile()
             return true
         } catch {
             errorMessage = readableAuthError(error, provider: "email")
@@ -791,7 +993,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 if let priceCents = settings?.proMonthlyPriceCents, priceCents > 0 {
                     self.proMonthlyPriceCents = priceCents
                 } else {
-                    self.proMonthlyPriceCents = 500
+                    self.proMonthlyPriceCents = 199
                 }
                 self.proBillingURL = settings?.proBillingURL?.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.proPortalURL = settings?.proPortalURL?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -802,7 +1004,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 self.photoStorageEnabled = false
                 self.guestQuotaLimit = 5
                 self.signedInFreeQuotaLimit = 25
-                self.proMonthlyPriceCents = 500
+                self.proMonthlyPriceCents = 199
                 self.proBillingURL = nil
                 self.proPortalURL = nil
             }
@@ -913,6 +1115,17 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         } catch {
             errorMessage = readableProfileError(error)
             return false
+        }
+    }
+
+    func updateLeaderboardVisibility(_ visible: Bool) async {
+        guard let supabase else { return }
+        guard let user else { return }
+        guard let accessToken = await ensureValidSession() else { return }
+        do {
+            try await supabase.updateLeaderboardVisibility(id: user.id, visible: visible, accessToken: accessToken)
+        } catch {
+            AuthLog.warn("updateLeaderboardVisibility failed (best-effort): \(error.localizedDescription)")
         }
     }
 
@@ -1166,6 +1379,11 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         await loadUserAndProfile()
     }
 
+    @discardableResult
+    func refreshStoreKitSubscriptionState() async -> Bool? {
+        await reconcileStoreKitSubscriptionState()
+    }
+
     private func restoreSession() {
         guard let data = KeychainStore.read(service: sessionKey, account: "default"),
               let stored = try? JSONDecoder().decode(SupabaseSession.self, from: data)
@@ -1192,6 +1410,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         switchPreferencesScope(to: .guest)
         lastKnownSignedInUserID = nil
         UserDefaults.standard.removeObject(forKey: lastSignedInUserIDKey)
+        lastMirroredSubscriptionState = nil
         errorMessage = nil
         isAdmin = false
         guestQuota = nil
@@ -1268,22 +1487,60 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
             await MainActor.run { self.isAdmin = false }
         }
 
+        let localStoreKitIsActive = await currentStoreKitEntitlementState()
+
         var didResolve = false
         await MainActor.run {
-            self.applyCloudSubscriptionState(from: profile, authoritativeIsPro: nil)
-            let hasDefinitiveSubscriptionState =
-                profile.isProSubscriber != nil ||
-                profile.analysisQuotaRemaining != nil ||
-                profile.signedInMonthlyQuotaLimit != nil
-            self.didResolveSubscriptionState = hasDefinitiveSubscriptionState
-            didResolve = hasDefinitiveSubscriptionState
+            if localStoreKitIsActive == true {
+                self.applyVerifiedSubscriptionState(true)
+                didResolve = true
+            } else {
+                self.applyCloudSubscriptionState(from: profile, authoritativeIsPro: nil)
+                let hasDefinitiveSubscriptionState =
+                    profile.isProSubscriber != nil ||
+                    profile.analysisQuotaRemaining != nil ||
+                    profile.signedInMonthlyQuotaLimit != nil
+                self.didResolveSubscriptionState = hasDefinitiveSubscriptionState
+                didResolve = hasDefinitiveSubscriptionState
+            }
+        }
+
+        let resolvedStoreKitState: Bool?
+        if let localStoreKitIsActive {
+            resolvedStoreKitState = localStoreKitIsActive
+        } else {
+            resolvedStoreKitState = await reconcileStoreKitSubscriptionState(accessToken: accessToken)
+        }
+
+        if let storeKitIsActive = resolvedStoreKitState {
+            await MainActor.run {
+                self.didResolveSubscriptionState = true
+                didResolve = true
+                self.applyVerifiedSubscriptionState(storeKitIsActive)
+            }
         }
 
         if let authoritativeIsPro = try? await supabase.fetchSubscriptionState(userId: profile.id, accessToken: accessToken) {
             await MainActor.run {
-                self.applyCloudSubscriptionState(from: profile, authoritativeIsPro: authoritativeIsPro)
+                if localStoreKitIsActive == true {
+                    self.applyVerifiedSubscriptionState(true)
+                } else {
+                    self.applyCloudSubscriptionState(from: profile, authoritativeIsPro: authoritativeIsPro)
+                }
                 self.didResolveSubscriptionState = true
                 didResolve = true
+            }
+            let refreshedStoreKitState: Bool?
+            if let localStoreKitIsActive {
+                refreshedStoreKitState = localStoreKitIsActive
+            } else {
+                refreshedStoreKitState = await currentStoreKitEntitlementState()
+            }
+
+            if let storeKitIsActive = refreshedStoreKitState {
+                await MainActor.run {
+                    self.applyVerifiedSubscriptionState(storeKitIsActive)
+                }
             }
         }
 
@@ -1395,6 +1652,49 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         }
     }
 
+    private func passwordRecoveryRedirectURL() -> URL? {
+        guard let scheme = registeredAppScheme() else { return nil }
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "auth"
+        components.path = "/reset-password"
+        return components.url
+    }
+
+    private func registeredAppScheme() -> String? {
+        guard let urlTypes = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] else {
+            return nil
+        }
+        for urlType in urlTypes {
+            guard let schemes = urlType["CFBundleURLSchemes"] as? [String] else { continue }
+            if let appScheme = schemes.first(where: { !$0.hasPrefix("com.googleusercontent.apps.") }) {
+                return appScheme
+            }
+        }
+        return nil
+    }
+
+    private func incomingURLItems(_ url: URL) -> [String: String] {
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let query = components?.query ?? ""
+        let fragment = components?.fragment ?? ""
+        return parseURLItems(query + "&" + fragment)
+    }
+
+    private func parseURLItems(_ input: String) -> [String: String] {
+        input
+            .split(separator: "&")
+            .reduce(into: [String: String]()) { result, rawPair in
+                let parts = rawPair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                guard let rawKey = parts.first else { return }
+                let key = String(rawKey).removingPercentEncoding ?? String(rawKey)
+                let value = parts.count > 1
+                    ? (String(parts[1]).removingPercentEncoding ?? String(parts[1]))
+                    : ""
+                result[key] = value
+            }
+    }
+
     private func readableAuthError(_ error: Error, provider: String) -> String {
         if let serviceError = error as? SupabaseService.ServiceError {
             switch serviceError {
@@ -1404,8 +1704,9 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                     let lowercased = message.lowercased()
                     if lowercased.contains("already registered")
                         || lowercased.contains("already exists")
-                        || lowercased.contains("user exists") {
-                        return "An account already exists for this email. Please sign in instead."
+                        || lowercased.contains("user exists")
+                        || lowercased.contains("has already been registered") {
+                        return "This email has already been used. Please sign in instead."
                     }
                 }
                 if provider == "google", message.lowercased().contains("nonce") {
@@ -1413,7 +1714,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
                 }
                 return "Supabase HTTP \(code): \(message)"
             case .emailAlreadyRegistered:
-                return "An account already exists for this email. Please sign in instead."
+                return "This email has already been used. Please sign in instead."
             case .invalidResponse:
                 return "Supabase returned an invalid response."
             case .invalidCallback:
@@ -1462,6 +1763,210 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
         return "Profile sync failed: \(nsError.localizedDescription)"
     }
 
+    private func startTransactionUpdatesListener() {
+        transactionUpdatesTask?.cancel()
+        transactionUpdatesTask = Task.detached(priority: .background) { [weak self] in
+            for await update in StoreKit.Transaction.updates {
+                guard let self else { return }
+                await self.handleTransactionUpdate(update)
+            }
+        }
+    }
+
+    private func handleTransactionUpdate(_ update: VerificationResult<StoreKit.Transaction>) async {
+        guard let productID = BootstrapConfig.appStoreSubscriptionProductID else { return }
+        switch update {
+        case .verified(let transaction):
+            guard transaction.productID == productID else { return }
+            await transaction.finish()
+            _ = await reconcileStoreKitSubscriptionState()
+        case .unverified(let transaction, let error):
+            guard transaction.productID == productID else { return }
+            AuthLog.warn("Ignoring unverified App Store transaction for \(productID): \(error.localizedDescription)")
+        }
+    }
+
+    private func currentStoreKitEntitlementState() async -> Bool? {
+        guard let productID = BootstrapConfig.appStoreSubscriptionProductID else { return nil }
+        for await entitlement in StoreKit.Transaction.currentEntitlements {
+            switch entitlement {
+            case .verified(let transaction):
+                guard transaction.productID == productID else { continue }
+                if isTransactionEntitled(transaction) {
+                    return true
+                }
+            case .unverified(let transaction, let error):
+                guard transaction.productID == productID else { continue }
+                AuthLog.warn("Ignoring unverified entitlement for \(productID): \(error.localizedDescription)")
+            }
+        }
+        return false
+    }
+
+    @discardableResult
+    private func reconcileStoreKitSubscriptionState(
+        accessToken: String? = nil,
+        syncToSupabase: Bool = true
+    ) async -> Bool? {
+        guard let isActive = await currentStoreKitEntitlementState() else { return nil }
+        applyVerifiedSubscriptionState(isActive)
+        guard syncToSupabase else { return isActive }
+        await mirrorVerifiedEntitlementToSupabase(isActive: isActive, accessToken: accessToken)
+        return isActive
+    }
+
+    private func applyVerifiedSubscriptionState(_ isActive: Bool) {
+        hasActiveSubscription = isActive
+        didResolveSubscriptionState = true
+        if isActive {
+            signedInQuotaRemaining = nil
+        }
+        guard isSignedIn, let user else { return }
+        self.user = SupabaseUser(
+            id: user.id,
+            email: user.email,
+            displayName: user.displayName,
+            preferences: user.preferences,
+            authProviders: user.authProviders,
+            avatarURL: user.avatarURL,
+            isProSubscriber: isActive,
+            analysisQuotaRemaining: user.analysisQuotaRemaining,
+            analysisQuotaMonth: user.analysisQuotaMonth,
+            signedInMonthlyQuotaLimit: user.signedInMonthlyQuotaLimit
+        )
+    }
+
+    private func mirrorVerifiedEntitlementToSupabase(isActive: Bool, accessToken: String?) async {
+        guard let supabase, let userID = user?.id else { return }
+        if let lastMirroredSubscriptionState,
+           lastMirroredSubscriptionState.userID == userID,
+           lastMirroredSubscriptionState.isActive == isActive {
+            return
+        }
+        let resolvedToken: String?
+        if let at = accessToken {
+            resolvedToken = at
+        } else {
+            resolvedToken = await ensureValidSession()
+        }
+        guard let token = resolvedToken else { return }
+        do {
+            try await supabase.updateUserSubscriptionStatus(isActive: isActive, accessToken: token)
+            lastMirroredSubscriptionState = (userID, isActive)
+            applyVerifiedSubscriptionState(isActive)
+        } catch {
+            AuthLog.warn("Failed to mirror App Store entitlement to Supabase: \(error.localizedDescription)")
+        }
+    }
+
+    private func verifiedTransaction(from result: VerificationResult<StoreKit.Transaction>) throws -> StoreKit.Transaction {
+        switch result {
+        case .verified(let transaction):
+            return transaction
+        case .unverified(_, let error):
+            throw StoreSubscriptionError.unverifiedTransaction(error.localizedDescription)
+        }
+    }
+
+    private func fetchSubscriptionProduct(productID: String) async throws -> Product {
+        do {
+            let initialProducts = try await Product.products(for: [productID])
+            if let product = initialProducts.first(where: { $0.id == productID }) {
+                return try validatedSubscriptionProduct(product, expectedProductID: productID)
+            }
+
+            try? await Task.sleep(nanoseconds: 450_000_000)
+
+            let retryProducts = try await Product.products(for: [productID])
+            if let retryProduct = retryProducts.first(where: { $0.id == productID }) {
+                return try validatedSubscriptionProduct(retryProduct, expectedProductID: productID)
+            }
+
+            AuthLog.warn("App Store product not found for id \(productID) after quiet retry.")
+            throw StoreSubscriptionError.productLookupFailed(
+                productID: productID,
+                reason: "StoreKit returned zero matching products after two lookup attempts.",
+                code: "IAP-PRODUCT-NOT-FOUND"
+            )
+        } catch {
+            if let subscriptionError = error as? StoreSubscriptionError {
+                throw subscriptionError
+            }
+
+            AuthLog.warn("App Store product fetch failed for \(productID): \(error.localizedDescription)")
+            throw StoreSubscriptionError.productLookupFailed(
+                productID: productID,
+                reason: error.localizedDescription,
+                code: "IAP-STOREKIT-REQUEST-FAILED"
+            )
+        }
+    }
+
+    private func isTransactionEntitled(_ transaction: StoreKit.Transaction) -> Bool {
+        if transaction.revocationDate != nil {
+            return false
+        }
+        if transaction.isUpgraded {
+            return false
+        }
+        if let expirationDate = transaction.expirationDate {
+            return expirationDate > Date()
+        }
+        return true
+    }
+
+    private enum StoreSubscriptionError: LocalizedError {
+        case missingProductConfiguration
+        case productLookupFailed(productID: String, reason: String, code: String)
+        case invalidProductType(productID: String, actualType: String)
+        case pending
+        case userCancelled
+        case inactiveEntitlement
+        case noActiveSubscriptionToRestore
+        case unverifiedTransaction(String)
+        case unknown
+
+        var errorDescription: String? {
+            switch self {
+            case .missingProductConfiguration:
+                return "[IAP-CONFIG-MISSING] The app is missing `APP_STORE_SUBSCRIPTION_PRODUCT_ID` in its bundle configuration."
+            case .productLookupFailed(let productID, let reason, let code):
+                return "[\(code)] Unable to load App Store product `\(productID)`. \(reason) If this is a TestFlight build, verify the subscription is attached to this app, available for this bundle ID, and reachable in sandbox/TestFlight."
+            case .invalidProductType(let productID, let actualType):
+                return "[IAP-PRODUCT-TYPE-MISMATCH] App Store product `\(productID)` resolved as `\(actualType)` instead of an auto-renewable subscription."
+            case .pending:
+                return "Your App Store purchase is pending approval."
+            case .userCancelled:
+                return "The App Store purchase was canceled."
+            case .inactiveEntitlement:
+                return "The App Store purchase completed, but no active ReVive Pro entitlement was found."
+            case .noActiveSubscriptionToRestore:
+                return "No active ReVive Pro subscription was found to restore."
+            case .unverifiedTransaction(let message):
+                return "The App Store transaction could not be verified. \(message)"
+            case .unknown:
+                return "The App Store purchase could not be completed."
+            }
+        }
+    }
+
+    private func validatedSubscriptionProduct(_ product: Product, expectedProductID: String) throws -> Product {
+        guard product.id == expectedProductID else {
+            throw StoreSubscriptionError.productLookupFailed(
+                productID: expectedProductID,
+                reason: "StoreKit returned a different product identifier: \(product.id).",
+                code: "IAP-PRODUCT-ID-MISMATCH"
+            )
+        }
+        guard product.type == .autoRenewable else {
+            throw StoreSubscriptionError.invalidProductType(
+                productID: expectedProductID,
+                actualType: String(describing: product.type)
+            )
+        }
+        return product
+    }
+
     private func configureGoogleSignIn(reportErrors: Bool) -> Bool {
         let clientID = Secrets.googleIOSClientID
         let serverClientID = Secrets.googleWebClientID
@@ -1491,6 +1996,7 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
     }
 
     deinit {
+        transactionUpdatesTask?.cancel()
         for token in notificationObservers {
             NotificationCenter.default.removeObserver(token)
         }
@@ -1588,7 +2094,13 @@ final class AuthStore: NSObject, ObservableObject, ASAuthorizationControllerDele
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let window = scenes.flatMap { $0.windows }.first { $0.isKeyWindow }
-        return window ?? ASPresentationAnchor()
+        if let window = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) {
+            return window
+        }
+        if let scene = scenes.first {
+            return UIWindow(windowScene: scene)
+        }
+        // Unreachable in iOS 13+ (app always has at least one window scene)
+        return UIWindow()
     }
 }

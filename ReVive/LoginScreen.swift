@@ -316,7 +316,7 @@ struct LoginScreen: View {
         }
 
         if let lastDuplicateEmail, lastDuplicateEmail == trimmedEmail {
-            auth.errorMessage = "An account already exists for this email. Please sign in instead."
+            auth.errorMessage = "This email has already been used. Please sign in instead."
             return
         }
 

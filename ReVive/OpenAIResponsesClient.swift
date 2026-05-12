@@ -35,6 +35,7 @@ final class OpenAIResponsesClient {
         let postalCode: String?
         let countryCode: String?
         let deviceId: String?
+        let clientIsPro: Bool?
     }
 
     struct ProxyResponse: Decodable {
@@ -61,7 +62,8 @@ final class OpenAIResponsesClient {
         image: UIImage,
         itemText: String? = nil,
         location: LocationContext?,
-        accessToken: String?
+        accessToken: String?,
+        isProLocal: Bool = false
     ) async throws -> String {
 
         guard let url = edgeOpenAIURL else { throw OpenAIError.invalidURL }
@@ -81,7 +83,8 @@ final class OpenAIResponsesClient {
             administrativeArea: location?.administrativeArea,
             postalCode: location?.postalCode,
             countryCode: location?.countryCode,
-            deviceId: DeviceIDStore.current
+            deviceId: DeviceIDStore.current,
+            clientIsPro: isProLocal ? true : nil
         )
 
         var request = URLRequest(url: url)
@@ -134,7 +137,8 @@ final class OpenAIResponsesClient {
     func analyzeText(
         itemText: String,
         location: LocationContext?,
-        accessToken: String?
+        accessToken: String?,
+        isProLocal: Bool = false
     ) async throws -> String {
 
         guard let url = edgeOpenAIURL else { throw OpenAIError.invalidURL }
@@ -151,7 +155,8 @@ final class OpenAIResponsesClient {
             administrativeArea: location?.administrativeArea,
             postalCode: location?.postalCode,
             countryCode: location?.countryCode,
-            deviceId: DeviceIDStore.current
+            deviceId: DeviceIDStore.current,
+            clientIsPro: isProLocal ? true : nil
         )
 
         var request = URLRequest(url: url)
@@ -253,6 +258,12 @@ extension Notification.Name {
     static let reviveOpenHome = Notification.Name("revive.openHome")
     static let reviveReplayHomeChallengeTutorial = Notification.Name("revive.replayHomeChallengeTutorial")
     static let reviveOpenCapture = Notification.Name("revive.openCapture")
+    static let reviveTriggerCaptureShutter = Notification.Name("revive.triggerCaptureShutter")
+    static let reviveTriggerCaptureTextEntry = Notification.Name("revive.triggerCaptureTextEntry")
+    static let reviveOpenCaptureLibrary = Notification.Name("revive.openCaptureLibrary")
+    static let reviveSwitchCaptureCamera = Notification.Name("revive.switchCaptureCamera")
+    static let reviveDismissCaptureTextEntry = Notification.Name("revive.dismissCaptureTextEntry")
+    static let reviveCapturePhotoVisibilityChanged = Notification.Name("revive.capturePhotoVisibilityChanged")
     static let reviveOpenSubscription = Notification.Name("revive.openSubscription")
     static let reviveOpenTutorial = Notification.Name("revive.openTutorial")
     static let reviveMainTutorialVisibilityChanged = Notification.Name("revive.mainTutorialVisibilityChanged")

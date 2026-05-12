@@ -22,8 +22,7 @@ struct AccountView: View {
     @State private var didAppear = false
     @State private var previousSignedInState = false
     @State private var signInTransitionNonce: Int = 0
-    @State private var isStartingCheckout = false
-    @State private var isStartingPortal = false
+    @State private var isOpeningManageSubscriptions = false
     @State private var billingMessage: String?
     @State private var billingStatusScreen: BillingStatusScreen?
     @State private var challengeXP: Int = ChallengeProgression.currentXP()
@@ -135,27 +134,8 @@ struct AccountView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .reviveOpenSubscription)) { _ in
             if auth.isSignedIn {
-                startStripeCheckout()
+                startSubscriptionPurchase()
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .reviveBillingSuccess)) { _ in
-            billingStatusScreen = .success
-            Task { @MainActor in
-                // Stripe webhook updates can be slightly delayed; poll briefly for fresh user metadata.
-                for attempt in 0..<8 {
-                    await auth.refreshSignedInUserState()
-                    if auth.hasActiveSubscription {
-                        break
-                    }
-                    if attempt < 7 {
-                        try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    }
-                }
-                await auth.refreshImpactFromServer(history: history)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .reviveBillingError)) { _ in
-            billingStatusScreen = .error("Payment was canceled or failed.")
         }
         .onReceive(NotificationCenter.default.publisher(for: .reviveChallengeProgressUpdated)) { _ in
             refreshChallengeProgress()
@@ -164,6 +144,9 @@ struct AccountView: View {
             didAppear = true
             previousSignedInState = auth.isSignedIn
             refreshChallengeProgress()
+            Task { @MainActor in
+                await auth.loadSubscriptionProduct()
+            }
         }
         .fullScreenCover(isPresented: $showSignOutPrompt) {
             SignOutPromptView(
@@ -212,7 +195,7 @@ struct AccountView: View {
                     }
 
                     accountHeader
-                    if auth.didResolveSubscriptionState && !auth.hasActiveSubscription {
+                    if !auth.hasActiveSubscription {
                         subscriptionStatusCard
                     }
 
@@ -300,12 +283,12 @@ struct AccountView: View {
                             .font(AppType.title(16))
                             .foregroundStyle(.primary)
 
-                        if auth.isSignedIn && auth.didResolveSubscriptionState {
+                        if auth.isSignedIn && (auth.didResolveSubscriptionState || !auth.hasActiveSubscription) {
                             Button {
                                 if auth.hasActiveSubscription {
-                                    startCustomerPortal()
+                                    openManageSubscriptions()
                                 } else {
-                                    startStripeCheckout()
+                                    startSubscriptionPurchase()
                                 }
                             } label: {
                                 Text(auth.hasActiveSubscription ? "Manage" : "Upgrade")
@@ -318,8 +301,8 @@ struct AccountView: View {
                                     )
                             }
                             .buttonStyle(.plain)
-                            .disabled(isStartingPortal || isStartingCheckout)
-                            .opacity((isStartingPortal || isStartingCheckout) ? 0.7 : 1.0)
+                            .disabled(isSubscriptionActionInProgress)
+                            .opacity(isSubscriptionActionInProgress ? 0.7 : 1.0)
                         }
                     }
                     HStack(spacing: 8) {
@@ -400,7 +383,7 @@ struct AccountView: View {
     }
 
     private var subscriptionStatusCard: some View {
-        let priceLabel = formatMonthlyPrice(auth.proMonthlyPriceCents)
+        let priceLabel = auth.subscriptionDisplayPrice ?? formatMonthlyPrice(auth.proMonthlyPriceCents)
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -429,17 +412,42 @@ struct AccountView: View {
                     )
             }
 
-            Text("Upgrade to keep recycling once your free monthly scans are used.")
-                .font(AppType.body(12))
-                .foregroundStyle(.primary.opacity(0.7))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("ReVive Pro Monthly")
+                    .font(AppType.title(14))
+                    .foregroundStyle(.primary)
+                Text("1 month · \(priceLabel)/month")
+                    .font(AppType.body(13))
+                    .foregroundStyle(.primary.opacity(0.8))
+                Text("• Unlimited recycling scans")
+                    .font(AppType.body(12))
+                    .foregroundStyle(.primary.opacity(0.7))
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.06)))
+
+            Text("Subscription automatically renews monthly at \(priceLabel) unless canceled at least 24 hours before the end of the current period. Manage in your App Store account settings.")
+                .font(AppType.body(11))
+                .foregroundStyle(.primary.opacity(0.6))
+
+            Text(subscriptionLegalLinksText)
+                .font(AppType.body(11))
+                .foregroundStyle(.primary.opacity(0.65))
+
+            if !auth.isStoreKitSubscriptionConfigured {
+                Text("StoreKit setup is incomplete. Add `APP_STORE_SUBSCRIPTION_PRODUCT_ID` in the target build settings before testing purchases.")
+                    .font(AppType.body(12))
+                    .foregroundStyle(Color.yellow)
+            }
 
             Button {
-                startStripeCheckout()
+                startSubscriptionPurchase()
             } label: {
                 HStack {
                     Spacer().frame(width: 5)
                     Image(systemName: "crown.fill")
-                    Text(auth.hasActiveSubscription ? "Manage subscription" : "Upgrade plan")
+                    Text("Upgrade plan")
                         .font(AppType.title(15))
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -455,8 +463,25 @@ struct AccountView: View {
                 )
             }
             .buttonStyle(.plain)
-            .disabled(isStartingCheckout)
-            .opacity(isStartingCheckout ? 0.75 : 1.0)
+            .disabled(isSubscriptionActionInProgress || !auth.isStoreKitSubscriptionConfigured)
+            .opacity((isSubscriptionActionInProgress || !auth.isStoreKitSubscriptionConfigured) ? 0.75 : 1.0)
+
+            Button {
+                restoreSubscriptions()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.clockwise")
+                    Text("Restore purchases")
+                        .font(AppType.title(14))
+                }
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubscriptionActionInProgress || !auth.isStoreKitSubscriptionConfigured)
+            .opacity((isSubscriptionActionInProgress || !auth.isStoreKitSubscriptionConfigured) ? 0.75 : 1.0)
 
             if let billingMessage {
                 Text(billingMessage)
@@ -485,167 +510,92 @@ struct AccountView: View {
         return String(format: "$%.2f", dollars)
     }
 
-    private func startStripeCheckout() {
-        guard let endpoint = checkoutEndpoint() else {
-            billingStatusScreen = .error("Billing is not configured yet.")
+    private var subscriptionLegalLinksText: AttributedString {
+        var text = AttributedString("Privacy Policy · Terms of Use (EULA)")
+        if let range = text.range(of: "Privacy Policy") {
+            text[range].link = URL(string: "https://reviveearth.vercel.app/policy")
+            text[range].foregroundColor = .blue
+            text[range].underlineStyle = .single
+        }
+        if let range = text.range(of: "Terms of Use (EULA)") {
+            text[range].link = URL(string: "https://reviveearth.vercel.app/terms")
+            text[range].foregroundColor = .blue
+            text[range].underlineStyle = .single
+        }
+        return text
+    }
+
+    private var isSubscriptionActionInProgress: Bool {
+        auth.isLoadingSubscriptionProduct ||
+        auth.isPurchasingSubscription ||
+        auth.isRestoringPurchases ||
+        isOpeningManageSubscriptions
+    }
+
+    private func startSubscriptionPurchase() {
+        guard auth.isStoreKitSubscriptionConfigured else {
+            billingStatusScreen = .error("The App Store subscription is not configured yet.")
             return
         }
 
-        isStartingCheckout = true
-        billingMessage = nil
+        billingMessage = "Connecting to the App Store..."
 
-        Task {
-            guard let accessToken = await auth.accessTokenForAPI(), !accessToken.isEmpty else {
-                await MainActor.run {
-                    isStartingCheckout = false
-                    billingStatusScreen = .error("Session expired. Please sign in again.")
-                }
-                return
-            }
-
-            defer {
-                Task { @MainActor in
-                    isStartingCheckout = false
-                }
-            }
-
+        Task { @MainActor in
             do {
-                var request = URLRequest(url: endpoint)
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-                if !Secrets.supabaseAnonKey.isEmpty {
-                    request.setValue(Secrets.supabaseAnonKey, forHTTPHeaderField: "apikey")
-                }
-                request.httpBody = try JSONSerialization.data(withJSONObject: ["method": "stripe"], options: [])
-
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse else {
-                    await MainActor.run {
-                        billingStatusScreen = .error("Invalid billing response.")
-                    }
-                    return
-                }
-                guard (200...299).contains(http.statusCode) else {
-                    let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-                    await MainActor.run {
-                        billingStatusScreen = .error(message ?? "Billing request failed (\(http.statusCode)).")
-                    }
-                    return
-                }
-                guard
-                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                    let checkoutURLString = json["url"] as? String,
-                    let checkoutURL = URL(string: checkoutURLString)
-                else {
-                    await MainActor.run {
-                        billingStatusScreen = .error("Checkout URL missing in billing response.")
-                    }
-                    return
-                }
-
-                await MainActor.run {
-                    UIApplication.shared.open(checkoutURL)
-                    billingMessage = "Opening Stripe Checkout..."
-                }
+                try await auth.purchaseSubscription()
+                billingMessage = nil
+                await handleSubscriptionSuccess()
             } catch {
-                await MainActor.run {
-                    billingStatusScreen = .error("Unable to start checkout right now.")
-                }
+                billingMessage = nil
+                billingStatusScreen = .error(error.localizedDescription)
             }
         }
     }
 
-    private func startCustomerPortal() {
-        guard let endpoint = customerPortalEndpoint() else {
-            billingStatusScreen = .error("Billing portal is not configured yet.")
+    private func restoreSubscriptions() {
+        guard auth.isStoreKitSubscriptionConfigured else {
+            billingStatusScreen = .error("The App Store subscription is not configured yet.")
             return
         }
 
-        isStartingPortal = true
-        billingMessage = nil
+        billingMessage = "Checking the App Store for past purchases..."
 
-        Task {
-            guard let accessToken = await auth.accessTokenForAPI(), !accessToken.isEmpty else {
-                await MainActor.run {
-                    isStartingPortal = false
-                    billingStatusScreen = .error("Session expired. Please sign in again.")
-                }
-                return
-            }
-
-            defer {
-                Task { @MainActor in
-                    isStartingPortal = false
-                }
-            }
-
+        Task { @MainActor in
             do {
-                var request = URLRequest(url: endpoint)
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-                if !Secrets.supabaseAnonKey.isEmpty {
-                    request.setValue(Secrets.supabaseAnonKey, forHTTPHeaderField: "apikey")
-                }
-
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse else {
-                    await MainActor.run {
-                        billingStatusScreen = .error("Invalid portal response.")
-                    }
-                    return
-                }
-                guard (200...299).contains(http.statusCode) else {
-                    let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-                    await MainActor.run {
-                        billingStatusScreen = .error(message ?? "Portal request failed (\(http.statusCode)).")
-                    }
-                    return
-                }
-                guard
-                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                    let portalURLString = json["url"] as? String,
-                    let portalURL = URL(string: portalURLString)
-                else {
-                    await MainActor.run {
-                        billingStatusScreen = .error("Portal URL missing in response.")
-                    }
-                    return
-                }
-
-                await MainActor.run {
-                    UIApplication.shared.open(portalURL)
-                }
+                try await auth.restorePurchases()
+                billingMessage = nil
+                await handleSubscriptionSuccess()
             } catch {
-                await MainActor.run {
-                    billingStatusScreen = .error("Unable to open billing portal right now.")
+                billingMessage = nil
+                billingStatusScreen = .error(error.localizedDescription)
+            }
+        }
+    }
+
+    private func openManageSubscriptions() {
+        guard let url = URL(string: "https://apps.apple.com/account/subscriptions") else {
+            billingStatusScreen = .error("Unable to open App Store subscriptions.")
+            return
+        }
+
+        isOpeningManageSubscriptions = true
+        billingMessage = nil
+        UIApplication.shared.open(url) { success in
+            Task { @MainActor in
+                isOpeningManageSubscriptions = false
+                if success {
+                    billingMessage = "Opening App Store subscriptions..."
+                } else {
+                    billingStatusScreen = .error("Unable to open App Store subscriptions.")
                 }
             }
         }
     }
 
-    private func checkoutEndpoint() -> URL? {
-        if let configured = auth.proBillingURL?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !configured.isEmpty,
-           let url = URL(string: configured) {
-            if url.host?.contains("checkout.stripe.com") == true {
-                return nil
-            }
-            return url
-        }
-        guard let base = BootstrapConfig.edgeBaseURL else { return nil }
-        return base.appendingPathComponent("functions/v1/create-checkout-session")
-    }
-
-    private func customerPortalEndpoint() -> URL? {
-        if let configured = auth.proPortalURL?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !configured.isEmpty,
-           let url = URL(string: configured) {
-            return url
-        }
-        guard let base = BootstrapConfig.edgeBaseURL else { return nil }
-        return base.appendingPathComponent("functions/v1/create-customer-portal-session")
+    private func handleSubscriptionSuccess() async {
+        billingStatusScreen = .success
+        await auth.refreshSignedInUserState()
+        await auth.refreshImpactFromServer(history: history)
     }
 
     private var badgeGrid: some View {
@@ -774,16 +724,16 @@ private struct BillingResultView: View {
     private var screenTitle: String {
         switch screen {
         case .success:
-            return "Payment Successful"
+            return "Subscription Updated"
         case .error:
-            return "Payment Not Completed"
+            return "Subscription Not Completed"
         }
     }
 
     private var screenMessage: String {
         switch screen {
         case .success:
-            return "Your payment was received. Your ReVive Pro status will sync shortly."
+            return "Your App Store subscription is active. ReVive Pro should now be available."
         case .error(let message):
             return message
         }
@@ -996,9 +946,57 @@ private struct EditProfileView: View {
     @State private var photoData: Data?
     @State private var pendingImage: PendingImage?
     @FocusState private var nameFocused: Bool
+    @State private var hasInitialized = false
     
     private var profileImage: Image? {
         ProfileExtrasStore.loadProfileImage(data: photoData)
+    }
+
+    private func saveAndDismiss() {
+        Task { @MainActor in
+            auth.errorMessage = nil
+            let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            let emailChanged = auth.canEditEmailPassword && trimmedEmail != (auth.user?.email ?? "")
+            let wantsPasswordChange = auth.canUpdatePassword &&
+                (!newPassword.isEmpty || !confirmNewPassword.isEmpty)
+
+            if wantsPasswordChange {
+                guard newPassword == confirmNewPassword else {
+                    auth.errorMessage = "Passwords do not match."
+                    return
+                }
+                guard newPassword.count >= 6 else {
+                    auth.errorMessage = "Password must be at least 6 characters."
+                    return
+                }
+            }
+
+            if (emailChanged || (wantsPasswordChange && auth.canEditEmailPassword)) && currentPassword.isEmpty {
+                auth.errorMessage = "Enter your current password to continue."
+                return
+            }
+
+            let ok = await auth.updateProfile(
+                displayName: trimmedName,
+                email: emailChanged ? trimmedEmail : nil,
+                newPassword: wantsPasswordChange ? newPassword : nil,
+                currentPassword: (emailChanged || (wantsPasswordChange && auth.canEditEmailPassword)) ? currentPassword : nil
+            )
+            if ok {
+                if let photoData {
+                    _ = await auth.updateProfilePhoto(photoData: photoData)
+                }
+                ProfileExtrasStore.save(
+                    phoneNumber: phoneNumber,
+                    location: location,
+                    bio: bio,
+                    website: website,
+                    photoData: photoData
+                )
+                dismiss()
+            }
+        }
     }
 
     var body: some View {
@@ -1310,69 +1308,13 @@ private struct EditProfileView: View {
                             .foregroundStyle(.primary.opacity(0.7))
                     }
 
-                    Button {
-                        Task { @MainActor in
-                            auth.errorMessage = nil
-                            let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let emailChanged = auth.canEditEmailPassword && trimmedEmail != (auth.user?.email ?? "")
-                            let wantsPasswordChange = auth.canUpdatePassword &&
-                                (!newPassword.isEmpty || !confirmNewPassword.isEmpty)
-
-                            if wantsPasswordChange {
-                                guard newPassword == confirmNewPassword else {
-                                    auth.errorMessage = "Passwords do not match."
-                                    return
-                                }
-                                guard newPassword.count >= 6 else {
-                                    auth.errorMessage = "Password must be at least 6 characters."
-                                    return
-                                }
-                            }
-
-                            if (emailChanged || (wantsPasswordChange && auth.canEditEmailPassword)) && currentPassword.isEmpty {
-                                auth.errorMessage = "Enter your current password to continue."
-                                return
-                            }
-
-                            let ok = await auth.updateProfile(
-                                displayName: trimmedName,
-                                email: emailChanged ? trimmedEmail : nil,
-                                newPassword: wantsPasswordChange ? newPassword : nil,
-                                currentPassword: (emailChanged || (wantsPasswordChange && auth.canEditEmailPassword)) ? currentPassword : nil
-                            )
-                            if ok {
-                                if let photoData {
-                                    _ = await auth.updateProfilePhoto(photoData: photoData)
-                                }
-                                ProfileExtrasStore.save(
-                                    phoneNumber: phoneNumber,
-                                    location: location,
-                                    bio: bio,
-                                    website: website,
-                                    photoData: photoData
-                                )
-                                dismiss()
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Text(auth.isLoading ? "Saving..." : "Save changes")
-                                .font(AppType.title(14))
-                            Spacer()
-                        }
-                        .foregroundStyle(.primary)
-                        .padding(.vertical, 12)
-                        .liquidGlassButton(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(auth.isLoading)
-
                 }
                 .padding(20)
+                .padding(.bottom, 40)
             }
             .onAppear {
+                guard !hasInitialized else { return }
+                hasInitialized = true
                 displayName = auth.user?.displayName ?? ""
                 email = auth.user?.email ?? ""
                 currentPassword = ""
@@ -1383,6 +1325,17 @@ private struct EditProfileView: View {
                 bio = ProfileExtrasStore.loadBio()
                 website = ProfileExtrasStore.loadWebsite()
                 photoData = ProfileExtrasStore.loadProfileImageData()
+            }
+            .onDisappear {
+                guard hasInitialized else { return }
+                Task { @MainActor in
+                    let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    _ = await auth.updateProfile(displayName: trimmedName, email: nil, newPassword: nil, currentPassword: nil)
+                    if let photoData {
+                        _ = await auth.updateProfilePhoto(photoData: photoData)
+                    }
+                    ProfileExtrasStore.save(phoneNumber: phoneNumber, location: location, bio: bio, website: website, photoData: photoData)
+                }
             }
             .onChange(of: selectedPhoto) { _, newValue in
                 guard let newValue else { return }
@@ -1395,6 +1348,7 @@ private struct EditProfileView: View {
             }
         }
         .navigationBarBackButtonHidden(true)
+        .interactiveDismissDisabled(auth.isLoading)
         .fullScreenCover(item: $pendingImage) { item in
             ProfilePhotoCropper(
                 image: item.image,

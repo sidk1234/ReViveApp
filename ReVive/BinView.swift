@@ -92,461 +92,336 @@ struct BinView: View {
         filteredEntries.first(where: { $0.recyclable && $0.recycleStatus != .recycled })
     }
 
+    private var hasVisibleEntries: Bool {
+        !history.entries.isEmpty && !filteredEntries.isEmpty
+    }
+
     var body: some View {
-        ZStack {
-            AppTheme.backgroundGradient(colorScheme)
-                .ignoresSafeArea()
+        configuredView
+    }
 
-            GeometryReader { pageGeo in
-                let horizontalPadding = AppLayout.pageHorizontalPadding(for: pageGeo.size.width)
-                let topPadding = AppLayout.pageTopPadding(for: pageGeo.size.width)
-                let bottomPadding = AppLayout.pageBottomPadding(for: pageGeo.size.width)
-
-                List {
-                        Section {
-                            VStack(alignment: .leading, spacing: 16) {
-                                HStack {
-                                    Text("Bin")
-                                        .font(AppType.display(30))
-                                        .foregroundStyle(.primary)
-
-                                    Spacer()
-
-                                    if !history.entries.isEmpty {
-                                        Button(isSelectionMode ? "Done" : "Select") {
-                                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                                isSelectionMode.toggle()
-                                                if !isSelectionMode {
-                                                    selectedEntryIDs.removeAll()
-                                                }
-                                            }
-                                        }
-                                        .font(AppType.title(14))
-                                        .foregroundStyle(.primary)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 9)
-                                        .background(
-                                            Capsule().fill(.ultraThinMaterial)
-                                        )
-                                        .overlay(
-                                            Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1)
-                                        )
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-
-                                BinStatsRow(
-                                    totalCount: totalCount,
-                                    markedCount: markedCount,
-                                    recycledCount: recycledCount,
-                                    totalCarbonSavedKg: totalCarbonSavedKg
-                                )
-                                BinSearchBar(text: $searchText)
-
-                                if isSelectionMode {
-                                    BinSelectionBar(
-                                        selectedCount: selectedEntryIDs.count,
-                                        markableCount: filteredMarkableCount,
-                                        canMarkSelected: canMarkSelectedEntries,
-                                        onMarkSelected: {
-                                            withAnimation(.easeInOut(duration: 0.2)) {
-                                                showBulkRecycleConfirm = true
-                                            }
-                                        },
-                                        onDeleteSelected: {
-                                            withAnimation(.easeInOut(duration: 0.2)) {
-                                                showBulkDeleteConfirm = true
-                                            }
-                                        }
-                                    )
-                                }
-
-                                if history.entries.isEmpty {
-                                    VStack(spacing: 12) {
-                                        Image(systemName: "trash")
-                                            .font(.system(size: 34, weight: .bold))
-                                            .foregroundStyle(.primary.opacity(0.7))
-
-                                        Text("Your bin is empty")
-                                            .font(AppType.title(18))
-                                            .foregroundStyle(.primary)
-
-                                        Text("Analyze an item, then tap Mark for Recycle to add it here.")
-                                            .font(AppType.body(14))
-                                            .foregroundStyle(.primary.opacity(0.7))
-                                            .multilineTextAlignment(.center)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(24)
-                                    .staticCard(cornerRadius: 22)
-                                } else if filteredEntries.isEmpty {
-                                    VStack(spacing: 10) {
-                                        Image(systemName: "magnifyingglass")
-                                            .font(.system(size: 26, weight: .semibold))
-                                            .foregroundStyle(.primary.opacity(0.75))
-                                        Text("No matching items")
-                                            .font(AppType.title(16))
-                                            .foregroundStyle(.primary)
-                                        Text("Try a different search term.")
-                                            .font(AppType.body(13))
-                                            .foregroundStyle(.primary.opacity(0.7))
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(22)
-                                    .staticCard(cornerRadius: 22)
-                                }
-                            }
-                            .padding(.top, topPadding)
-                            .padding(.bottom, 6)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .adaptivePageFrame(width: pageGeo.size.width)
-                        }
-                        .listRowInsets(EdgeInsets(top: 0, leading: horizontalPadding, bottom: 0, trailing: horizontalPadding))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-
-                        if !history.entries.isEmpty && !filteredEntries.isEmpty {
-                            ForEach(filteredEntries) { entry in
-                                let isSelectable = entry.recyclable && entry.recycleStatus != .recycled
-                                BinEntryCard(
-                                    entry: entry,
-                                    isSelectionMode: isSelectionMode,
-                                    isSelected: selectedEntryIDs.contains(entry.id),
-                                    onTap: {
-                                        if isSelectionMode {
-                                            toggleEntrySelection(entry.id)
-                                        } else {
-                                            selectedEntry = entry
-                                        }
-                                    }
-                                )
-                                .equatable()
-                                .anchorPreference(key: BinMarkAsRecycledAnchorKey.self, value: .bounds) { anchor in
-                                    guard showMarkAsRecycledTutorial else { return nil }
-                                    guard entry.id == firstMarkableEntryID else { return nil }
-                                    return anchor
-                                }
-                                .padding(.vertical, 7)
-                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    if !isSelectionMode, isSelectable {
-                                        Button {
-                                            requestSwipeActionConfirm(for: entry, kind: .mark)
-                                        } label: {
-                                            Label("Mark", systemImage: "checkmark.circle.fill")
-                                        }
-                                        .tint(AppTheme.mint)
-                                    }
-                                }
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    if !isSelectionMode {
-                                        Button {
-                                            requestSwipeActionConfirm(for: entry, kind: .delete)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash.fill")
-                                        }
-                                        .tint(Color(red: 0.92, green: 0.27, blue: 0.32))
-                                    }
-                                }
-                                .listRowInsets(EdgeInsets(top: 0, leading: horizontalPadding, bottom: 0, trailing: horizontalPadding))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                            }
-
-                            Color.clear
-                                .frame(height: bottomPadding + 10)
-                                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                        }
-                    }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.clear)
-                    .onAppear {
-                        prewarmBinThumbnailCache(for: filteredEntries)
-                    }
+    private var configuredView: some View {
+        rootView
+            .sheet(item: $selectedEntry) { entry in
+                detailSheet(for: entry)
             }
-        }
-        .sheet(item: $selectedEntry) { entry in
-            BinDetailView(
-                entry: entry,
-                onMarkAsRecycled: {
-                    completeMarkAsRecycled(entry)
-                },
-                onDeleteImpact: {
-                    deleteEntry(entry)
+            .overlay {
+                overlayContent
+            }
+            .overlayPreferenceValue(BinMarkAsRecycledAnchorKey.self) { anchor in
+                markAsRecycledTutorialOverlay(anchor: anchor)
+            }
+            .animation(.easeInOut(duration: 0.2), value: showBulkRecycleConfirm)
+            .animation(.easeInOut(duration: 0.2), value: showBulkDeleteConfirm)
+            .animation(.easeInOut(duration: 0.2), value: pendingSwipeAction?.id)
+            .animation(.easeInOut(duration: 0.2), value: showCarbonSavedOverlay)
+            .onAppear {
+                updateMarkAsRecycledTutorialVisibility()
+            }
+            .onChange(of: history.entries.map(\.id)) { _, ids in
+                let idSet = Set(ids)
+                selectedEntryIDs = selectedEntryIDs.intersection(idSet)
+                if selectedEntryIDs.isEmpty, isSelectionMode, filteredMarkableCount == 0 {
+                    isSelectionMode = false
                 }
+                prewarmBinThumbnailCache(for: filteredEntries)
+                updateMarkAsRecycledTutorialVisibility()
+            }
+            .onChange(of: searchText) { _, _ in
+                prewarmBinThumbnailCache(for: filteredEntries)
+                updateMarkAsRecycledTutorialVisibility()
+            }
+            .onChange(of: isSelectionMode) { _, _ in
+                updateMarkAsRecycledTutorialVisibility()
+            }
+            .onChange(of: selectedEntry?.id) { _, _ in
+                updateMarkAsRecycledTutorialVisibility()
+            }
+            .onChange(of: isMainTutorialOverlayActive) { _, _ in
+                updateMarkAsRecycledTutorialVisibility()
+            }
+    }
+
+    private var rootView: some View {
+        ZStack {
+            backgroundView
+            contentView
+        }
+    }
+
+    private var backgroundView: some View {
+        AppTheme.backgroundGradient(colorScheme)
+            .ignoresSafeArea()
+    }
+
+    private var contentView: some View {
+        GeometryReader { pageGeo in
+            let horizontalPadding = AppLayout.pageHorizontalPadding(for: pageGeo.size.width)
+            let topPadding = AppLayout.pageTopPadding(for: pageGeo.size.width)
+            let bottomPadding = AppLayout.pageBottomPadding(for: pageGeo.size.width)
+
+            contentList(
+                pageWidth: pageGeo.size.width,
+                horizontalPadding: horizontalPadding,
+                topPadding: topPadding,
+                bottomPadding: bottomPadding
             )
         }
-        .overlay {
-            ZStack {
-                if showBulkRecycleConfirm {
-                    ZStack {
-                        Color.black.opacity(0.45)
-                            .ignoresSafeArea()
+    }
 
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("Confirm Recycling")
-                                .font(AppType.title(18))
-                                .foregroundStyle(.primary)
-
-                            Text("Are you sure you've recycled this?")
-                                .font(AppType.body(14))
-                                .foregroundStyle(.primary.opacity(0.8))
-
-                            HStack(spacing: 10) {
-                                Button("No") {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showBulkRecycleConfirm = false
-                                    }
-                                }
-                                .font(AppType.title(14))
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(.ultraThinMaterial)
-                                )
-
-                                Button("Yes") {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showBulkRecycleConfirm = false
-                                    }
-                                    completeMarkSelectedAsRecycled()
-                                }
-                                .font(AppType.title(14))
-                                .foregroundStyle(.black)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .liquidGlassButton(
-                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous),
-                                    tint: AppTheme.mint
-                                )
-                            }
-                        }
-                        .padding(20)
-                        .frame(maxWidth: 360)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-                        )
-                    }
-                    .transition(.opacity)
-                }
-
-                if showBulkDeleteConfirm {
-                    ZStack {
-                        Color.black.opacity(0.45)
-                            .ignoresSafeArea()
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("Delete Selected Impacts")
-                                .font(AppType.title(18))
-                                .foregroundStyle(.primary)
-
-                            Text("This will permanently remove the selected impacts from Bin.")
-                                .font(AppType.body(14))
-                                .foregroundStyle(.primary.opacity(0.8))
-
-                            HStack(spacing: 10) {
-                                Button("Cancel") {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showBulkDeleteConfirm = false
-                                    }
-                                }
-                                .font(AppType.title(14))
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(.ultraThinMaterial)
-                                )
-
-                                Button("Delete") {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showBulkDeleteConfirm = false
-                                    }
-                                    deleteSelectedEntries()
-                                }
-                                .font(AppType.title(14))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .liquidGlassButton(
-                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous),
-                                    tint: Color(red: 0.92, green: 0.27, blue: 0.32)
-                                )
-                            }
-                        }
-                        .padding(20)
-                        .frame(maxWidth: 360)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-                        )
-                    }
-                    .transition(.opacity)
-                }
-
-                if let pendingSwipeAction {
-                    ZStack {
-                        Color.black.opacity(0.45)
-                            .ignoresSafeArea()
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text(pendingSwipeAction.kind == .mark ? "Confirm Mark as Recycled" : "Confirm Delete")
-                                .font(AppType.title(18))
-                                .foregroundStyle(.primary)
-
-                            Text(
-                                pendingSwipeAction.kind == .mark
-                                    ? "Mark this impact as recycled?"
-                                    : "Delete this impact from Bin?"
-                            )
-                            .font(AppType.body(14))
-                            .foregroundStyle(.primary.opacity(0.8))
-
-                            HStack(spacing: 10) {
-                                Button("Cancel") {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        self.pendingSwipeAction = nil
-                                    }
-                                }
-                                .font(AppType.title(14))
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(.ultraThinMaterial)
-                                )
-
-                                Button(pendingSwipeAction.kind == .mark ? "Mark" : "Delete") {
-                                    confirmPendingSwipeAction()
-                                }
-                                .font(AppType.title(14))
-                                .foregroundStyle(pendingSwipeAction.kind == .mark ? .black : .white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .liquidGlassButton(
-                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous),
-                                    tint: pendingSwipeAction.kind == .mark
-                                        ? AppTheme.mint
-                                        : Color(red: 0.92, green: 0.27, blue: 0.32)
-                                )
-                            }
-                        }
-                        .padding(20)
-                        .frame(maxWidth: 360)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-                        )
-                    }
-                    .transition(.opacity)
-                }
-
-                if showConfetti {
-                    RecycleConfettiView()
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
-
-                if showCarbonSavedOverlay {
-                    VStack {
-                        Text(carbonSavedOverlayText)
-                            .font(AppType.title(15))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(
-                                Capsule().fill(.ultraThinMaterial)
-                            )
-                            .overlay(
-                                Capsule().stroke(Color.primary.opacity(0.18), lineWidth: 1)
-                            )
-                            .liquidGlassBackground(in: Capsule())
-                        Spacer()
-                    }
-                    .padding(.top, 74)
-                    .transition(.opacity.combined(with: .scale))
-                    .allowsHitTesting(false)
-                }
-            }
+    private func contentList(
+        pageWidth: CGFloat,
+        horizontalPadding: CGFloat,
+        topPadding: CGFloat,
+        bottomPadding: CGFloat
+    ) -> some View {
+        List {
+            headerSection(
+                pageWidth: pageWidth,
+                horizontalPadding: horizontalPadding,
+                topPadding: topPadding
+            )
+            entryRows(horizontalPadding: horizontalPadding, bottomPadding: bottomPadding)
         }
-        .overlayPreferenceValue(BinMarkAsRecycledAnchorKey.self) { anchor in
-            GeometryReader { proxy in
-                if showMarkAsRecycledTutorial,
-                   !isMainTutorialOverlayActive,
-                   !isSelectionMode,
-                   selectedEntry == nil,
-                   let anchor {
-                    let targetRect = proxy[anchor]
-                    TargetTutorialOverlay(
-                        targetRect: targetRect,
-                        title: "Mark As Recycled",
-                        message: "Tap this highlighted item, then confirm that you've recycled it to move it out of pending Bin status.",
-                        buttonTitle: nil,
-                        onDone: nil,
-                        highlightStyle: .roundedRect(cornerRadius: 20, padding: 0),
-                        showDirectionalArrow: false,
-                        showPressIndicator: true,
-                        onTargetTap: {
-                            if let entry = firstMarkableEntry {
-                                selectedEntry = entry
-                                completeMarkAsRecycledTutorialIfNeeded()
-                            }
-                        }
-                    )
-                    .transition(.opacity)
-                    .zIndex(400)
-                }
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: showBulkRecycleConfirm)
-        .animation(.easeInOut(duration: 0.2), value: showBulkDeleteConfirm)
-        .animation(.easeInOut(duration: 0.2), value: pendingSwipeAction?.id)
-        .animation(.easeInOut(duration: 0.2), value: showCarbonSavedOverlay)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
         .onAppear {
-            updateMarkAsRecycledTutorialVisibility()
+            prewarmBinThumbnailCache(for: filteredEntries)
         }
-        .onChange(of: history.entries.map(\.id)) { _, ids in
-            let idSet = Set(ids)
-            selectedEntryIDs = selectedEntryIDs.intersection(idSet)
-            if selectedEntryIDs.isEmpty, isSelectionMode, filteredMarkableCount == 0 {
-                isSelectionMode = false
+    }
+
+    private func headerSection(
+        pageWidth: CGFloat,
+        horizontalPadding: CGFloat,
+        topPadding: CGFloat
+    ) -> some View {
+        Section {
+            BinHeaderSection(
+                totalCount: totalCount,
+                markedCount: markedCount,
+                recycledCount: recycledCount,
+                totalCarbonSavedKg: totalCarbonSavedKg,
+                isSelectionMode: isSelectionMode,
+                hasEntries: !history.entries.isEmpty,
+                filteredEntriesEmpty: filteredEntries.isEmpty,
+                filteredMarkableCount: filteredMarkableCount,
+                selectedEntryIDsCount: selectedEntryIDs.count,
+                canMarkSelectedEntries: canMarkSelectedEntries,
+                searchText: $searchText,
+                onToggleSelectionMode: {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                        isSelectionMode.toggle()
+                        if !isSelectionMode {
+                            selectedEntryIDs.removeAll()
+                        }
+                    }
+                },
+                onMarkSelected: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showBulkRecycleConfirm = true
+                    }
+                },
+                onDeleteSelected: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showBulkDeleteConfirm = true
+                    }
+                }
+            )
+            .padding(.top, topPadding)
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .adaptivePageFrame(width: pageWidth)
+        }
+        .listRowInsets(EdgeInsets(top: 0, leading: horizontalPadding, bottom: 0, trailing: horizontalPadding))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder
+    private func entryRows(horizontalPadding: CGFloat, bottomPadding: CGFloat) -> some View {
+        if hasVisibleEntries {
+            ForEach(filteredEntries) { entry in
+                BinEntryRow(
+                    entry: entry,
+                    isSelectionMode: isSelectionMode,
+                    isSelected: selectedEntryIDs.contains(entry.id),
+                    firstMarkableEntryID: firstMarkableEntryID,
+                    showMarkAsRecycledTutorial: showMarkAsRecycledTutorial,
+                    horizontalPadding: horizontalPadding,
+                    isSelectable: entry.recyclable && entry.recycleStatus != .recycled,
+                    onTap: {
+                        if isSelectionMode {
+                            toggleEntrySelection(entry.id)
+                        } else {
+                            selectedEntry = entry
+                        }
+                    },
+                    onSwipeMark: { handleSwipeMark(entry) },
+                    onSwipeDelete: { handleSwipeDelete(entry) }
+                )
             }
-            prewarmBinThumbnailCache(for: filteredEntries)
-            updateMarkAsRecycledTutorialVisibility()
+
+            Color.clear
+                .frame(height: bottomPadding + 10)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
         }
-        .onChange(of: searchText) { _, _ in
-            prewarmBinThumbnailCache(for: filteredEntries)
-            updateMarkAsRecycledTutorialVisibility()
+    }
+
+    private func detailSheet(for entry: HistoryEntry) -> some View {
+        BinDetailView(
+            entry: entry,
+            onMarkAsRecycled: {
+                completeMarkAsRecycled(entry)
+            },
+            onDeleteImpact: {
+                deleteEntry(entry)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var overlayContent: some View {
+        ZStack {
+            if showBulkRecycleConfirm {
+                BinConfirmationOverlay(
+                    title: "Confirm Recycling",
+                    message: "Are you sure you've recycled this?",
+                    cancelTitle: "No",
+                    confirmTitle: "Yes",
+                    confirmTint: AppTheme.mint,
+                    confirmForegroundColor: .black,
+                    onCancel: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showBulkRecycleConfirm = false
+                        }
+                    },
+                    onConfirm: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showBulkRecycleConfirm = false
+                        }
+                        completeMarkSelectedAsRecycled()
+                    }
+                )
+                .transition(.opacity)
+            }
+
+            if showBulkDeleteConfirm {
+                BinConfirmationOverlay(
+                    title: "Delete Selected Impacts",
+                    message: "This will permanently remove the selected impacts from Bin.",
+                    cancelTitle: "Cancel",
+                    confirmTitle: "Delete",
+                    confirmTint: Color(red: 0.92, green: 0.27, blue: 0.32),
+                    confirmForegroundColor: .white,
+                    onCancel: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showBulkDeleteConfirm = false
+                        }
+                    },
+                    onConfirm: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showBulkDeleteConfirm = false
+                        }
+                        deleteSelectedEntries()
+                    }
+                )
+                .transition(.opacity)
+            }
+
+            if let pendingSwipeAction {
+                BinConfirmationOverlay(
+                    title: pendingSwipeAction.kind == .mark ? "Confirm Mark as Recycled" : "Confirm Delete",
+                    message: pendingSwipeAction.kind == .mark
+                        ? "Mark this impact as recycled?"
+                        : "Delete this impact from Bin?",
+                    cancelTitle: "Cancel",
+                    confirmTitle: pendingSwipeAction.kind == .mark ? "Mark" : "Delete",
+                    confirmTint: pendingSwipeAction.kind == .mark
+                        ? AppTheme.mint
+                        : Color(red: 0.92, green: 0.27, blue: 0.32),
+                    confirmForegroundColor: pendingSwipeAction.kind == .mark ? .black : .white,
+                    onCancel: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            self.pendingSwipeAction = nil
+                        }
+                    },
+                    onConfirm: {
+                        confirmPendingSwipeAction()
+                    }
+                )
+                .transition(.opacity)
+            }
+
+            if showConfetti {
+                RecycleConfettiView()
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
+            if showCarbonSavedOverlay {
+                VStack {
+                    Text(carbonSavedOverlayText)
+                        .font(AppType.title(15))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            Capsule().fill(.ultraThinMaterial)
+                        )
+                        .overlay(
+                            Capsule().stroke(Color.primary.opacity(0.18), lineWidth: 1)
+                        )
+                        .liquidGlassBackground(in: Capsule())
+                    Spacer()
+                }
+                .padding(.top, 74)
+                .transition(.opacity.combined(with: .scale))
+                .allowsHitTesting(false)
+            }
         }
-        .onChange(of: isSelectionMode) { _, _ in
-            updateMarkAsRecycledTutorialVisibility()
+    }
+
+    @ViewBuilder
+    private func markAsRecycledTutorialOverlay(anchor: Anchor<CGRect>?) -> some View {
+        GeometryReader { proxy in
+            if showMarkAsRecycledTutorial,
+               !isMainTutorialOverlayActive,
+               !isSelectionMode,
+               selectedEntry == nil,
+               let anchor {
+                let targetRect = proxy[anchor]
+                TargetTutorialOverlay(
+                    targetRect: targetRect,
+                    title: "Mark As Recycled",
+                    message: "Tap this highlighted item, then confirm that you've recycled it to move it out of pending Bin status.",
+                    buttonTitle: nil,
+                    onDone: nil,
+                    highlightStyle: .roundedRect(cornerRadius: 20, padding: 0),
+                    showDirectionalArrow: false,
+                    showPressIndicator: true,
+                    onTargetTap: {
+                        if let entry = firstMarkableEntry {
+                            selectedEntry = entry
+                            completeMarkAsRecycledTutorialIfNeeded()
+                        }
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(400)
+            }
         }
-        .onChange(of: selectedEntry?.id) { _, _ in
-            updateMarkAsRecycledTutorialVisibility()
-        }
-        .onChange(of: isMainTutorialOverlayActive) { _, _ in
-            updateMarkAsRecycledTutorialVisibility()
-        }
+    }
+
+    private func handleSwipeMark(_ entry: HistoryEntry) {
+        requestSwipeActionConfirm(for: entry, kind: .mark)
+    }
+
+    private func handleSwipeDelete(_ entry: HistoryEntry) {
+        requestSwipeActionConfirm(for: entry, kind: .delete)
     }
 
     private func completeMarkAsRecycled(_ entry: HistoryEntry) {
@@ -735,11 +610,244 @@ struct BinView: View {
     }
 }
 
+private struct BinEntryRow: View {
+    let entry: HistoryEntry
+    let isSelectionMode: Bool
+    let isSelected: Bool
+    let firstMarkableEntryID: UUID?
+    let showMarkAsRecycledTutorial: Bool
+    let horizontalPadding: CGFloat
+    let isSelectable: Bool
+    let onTap: () -> Void
+    let onSwipeMark: () -> Void
+    let onSwipeDelete: () -> Void
+
+    var body: some View {
+        BinEntryCard(
+            entry: entry,
+            isSelectionMode: isSelectionMode,
+            isSelected: isSelected,
+            onTap: onTap
+        )
+        .equatable()
+        .anchorPreference(key: BinMarkAsRecycledAnchorKey.self, value: .bounds) { anchor in
+            guard showMarkAsRecycledTutorial else { return nil }
+            guard entry.id == firstMarkableEntryID else { return nil }
+            return anchor
+        }
+        .padding(.vertical, 7)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if !isSelectionMode, isSelectable {
+                Button(action: onSwipeMark) {
+                    Label("Mark", systemImage: "checkmark.circle.fill")
+                }
+                .tint(AppTheme.mint)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            if !isSelectionMode {
+                Button(action: onSwipeDelete) {
+                    Label("Delete", systemImage: "trash.fill")
+                }
+                .tint(Color(red: 0.92, green: 0.27, blue: 0.32))
+            }
+        }
+        .listRowInsets(EdgeInsets(top: 0, leading: horizontalPadding, bottom: 0, trailing: horizontalPadding))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+}
+
+private struct BinHeaderSection: View {
+    let totalCount: Int
+    let markedCount: Int
+    let recycledCount: Int
+    let totalCarbonSavedKg: Double
+    let isSelectionMode: Bool
+    let hasEntries: Bool
+    let filteredEntriesEmpty: Bool
+    let filteredMarkableCount: Int
+    let selectedEntryIDsCount: Int
+    let canMarkSelectedEntries: Bool
+    @Binding var searchText: String
+    let onToggleSelectionMode: () -> Void
+    let onMarkSelected: () -> Void
+    let onDeleteSelected: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Bin")
+                    .font(AppType.display(30))
+                    .foregroundStyle(.primary)
+
+                Spacer()
+
+                if hasEntries {
+                    Button(isSelectionMode ? "Done" : "Select") {
+                        onToggleSelectionMode()
+                    }
+                    .font(AppType.title(14))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(
+                        Capsule().fill(.ultraThinMaterial)
+                    )
+                    .overlay(
+                        Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1)
+                    )
+                    .buttonStyle(.plain)
+                }
+            }
+
+            BinStatsRow(
+                totalCount: totalCount,
+                markedCount: markedCount,
+                recycledCount: recycledCount,
+                totalCarbonSavedKg: totalCarbonSavedKg
+            )
+
+            BinSearchBar(text: $searchText)
+
+            if isSelectionMode {
+                BinSelectionBar(
+                    selectedCount: selectedEntryIDsCount,
+                    markableCount: filteredMarkableCount,
+                    canMarkSelected: canMarkSelectedEntries,
+                    onMarkSelected: onMarkSelected,
+                    onDeleteSelected: onDeleteSelected
+                )
+            }
+
+            if !hasEntries {
+                VStack(spacing: 12) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(.primary.opacity(0.7))
+
+                    Text("Your bin is empty")
+                        .font(AppType.title(18))
+                        .foregroundStyle(.primary)
+
+                    Text("Analyze an item, then tap Mark for Recycle to add it here.")
+                        .font(AppType.body(14))
+                        .foregroundStyle(.primary.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(24)
+                .staticCard(cornerRadius: 22)
+            } else if filteredEntriesEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(0.75))
+                    Text("No matching items")
+                        .font(AppType.title(16))
+                        .foregroundStyle(.primary)
+                    Text("Try a different search term.")
+                        .font(AppType.body(13))
+                        .foregroundStyle(.primary.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(22)
+                .staticCard(cornerRadius: 22)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct BinMarkAsRecycledAnchorKey: PreferenceKey {
     static var defaultValue: Anchor<CGRect>?
 
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
         value = value ?? nextValue()
+    }
+}
+
+private struct BinConfirmationOverlay: View {
+    let title: String
+    let message: String
+    let cancelTitle: String
+    let confirmTitle: String
+    let confirmTint: Color
+    let confirmForegroundColor: Color
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    init(
+        title: String,
+        message: String,
+        cancelTitle: String,
+        confirmTitle: String,
+        confirmTint: Color,
+        confirmForegroundColor: Color,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping () -> Void
+    ) {
+        self.title = title
+        self.message = message
+        self.cancelTitle = cancelTitle
+        self.confirmTitle = confirmTitle
+        self.confirmTint = confirmTint
+        self.confirmForegroundColor = confirmForegroundColor
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                Text(title)
+                    .font(AppType.title(18))
+                    .foregroundStyle(.primary)
+
+                Text(message)
+                    .font(AppType.body(14))
+                    .foregroundStyle(.primary.opacity(0.8))
+
+                HStack(spacing: 10) {
+                    Button(cancelTitle) {
+                        onCancel()
+                    }
+                    .font(AppType.title(14))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                    )
+
+                    Button(confirmTitle) {
+                        onConfirm()
+                    }
+                    .font(AppType.title(14))
+                    .foregroundStyle(confirmForegroundColor)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .liquidGlassButton(
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous),
+                        tint: confirmTint
+                    )
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: 360)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+            )
+        }
     }
 }
 
