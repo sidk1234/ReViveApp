@@ -307,14 +307,7 @@ private struct LeaderboardOptInOverlay: View {
             }
             .padding(20)
             .frame(maxWidth: 360)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-            )
+            .staticCard(cornerRadius: 18)
         }
     }
 }
@@ -342,9 +335,10 @@ private struct LeaderboardRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Text("#\(rank)")
-                .font(AppType.title(14))
-                .foregroundStyle(.primary.opacity(0.7))
+            Text(rankLabel)
+                .font(AppType.title(rank <= 3 ? 16 : 14))
+                .foregroundStyle(rankColor)
+                .lineLimit(1)
                 .frame(width: 40, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -358,36 +352,54 @@ private struct LeaderboardRow: View {
                             .foregroundStyle(AppTheme.mint)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(
-                                Capsule().fill(AppTheme.mint.opacity(0.15))
-                            )
+                            .background(Capsule().fill(AppTheme.mint.opacity(0.15)))
                     }
                 }
 
                 let scans = entry.totalScans ?? 0
                 let recycled = entry.recyclableCount ?? 0
-                Text("\(recycled) recyclable • \(scans) scans")
+                Text("\(recycled) recyclable · \(scans) scans")
                     .font(AppType.body(12))
-                    .foregroundStyle(.primary.opacity(0.7))
+                    .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 2) {
+            VStack(alignment: .trailing, spacing: 1) {
                 Text(formatCarbon(entry.totalCarbonSavedKg))
-                    .font(AppType.title(18))
+                    .font(AppType.display(20))
                     .foregroundStyle(AppTheme.mint)
+                    .minimumScaleFactor(0.8)
+                    .lineLimit(1)
                 Text("CO2e")
                     .font(AppType.body(11))
-                    .foregroundStyle(.primary.opacity(0.62))
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(16)
         .staticCard(cornerRadius: 20)
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(isCurrentUser ? AppTheme.mint.opacity(0.4) : Color.clear, lineWidth: 1.5)
+                .stroke(isCurrentUser ? AppTheme.mint.opacity(0.5) : Color.clear, lineWidth: 1.5)
         )
+    }
+
+    private var rankLabel: String {
+        switch rank {
+        case 1: return "1st"
+        case 2: return "2nd"
+        case 3: return "3rd"
+        default: return "#\(rank)"
+        }
+    }
+
+    private var rankColor: Color {
+        switch rank {
+        case 1: return Color(red: 1.0, green: 0.80, blue: 0.20)
+        case 2: return Color(red: 0.75, green: 0.75, blue: 0.80)
+        case 3: return Color(red: 0.80, green: 0.55, blue: 0.28)
+        default: return .secondary
+        }
     }
 
     private func formatCarbon(_ value: Double) -> String {

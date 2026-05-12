@@ -23,12 +23,9 @@ enum AppTheme {
     static func backgroundGradient(_ scheme: ColorScheme) -> LinearGradient {
         if scheme == .light {
             return LinearGradient(
-                colors: [
-                    Color(red: 0.95, green: 0.98, blue: 1.00),
-                    Color(red: 0.85, green: 0.93, blue: 0.95)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+                colors: [Color(red: 0.97, green: 0.97, blue: 0.97), Color(red: 0.95, green: 0.95, blue: 0.95)],
+                startPoint: .top,
+                endPoint: .bottom
             )
         }
         return heroGradient
@@ -103,16 +100,11 @@ enum AppLayout {
 }
 
 extension View {
-    // NOTE: Static card background to avoid flashing when views recompose during scroll/toggle updates.
     func staticCard(cornerRadius: CGFloat = 20) -> some View {
         self
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(AppTheme.cardGradient)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    .fill(.regularMaterial)
             )
             .transaction { $0.disablesAnimations = true }
     }
@@ -122,17 +114,6 @@ extension View {
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(.ultraThinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(AppTheme.cardGradient)
-                    .blendMode(.screen)
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                    .allowsHitTesting(false)
             )
             .liquidGlassBackground(
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),

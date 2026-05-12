@@ -70,15 +70,11 @@ struct PasswordRecoveryView: View {
                                     .font(AppType.title(15))
                                 Spacer()
                             }
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(.black)
                             .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color.white.opacity(0.08))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                            .liquidGlassButton(
+                                in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                                tint: AppTheme.mint
                             )
                         }
                         .buttonStyle(.plain)
@@ -142,10 +138,6 @@ struct PasswordRecoveryView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         }
     }

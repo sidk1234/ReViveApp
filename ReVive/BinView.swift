@@ -369,13 +369,7 @@ struct BinView: View {
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(
-                            Capsule().fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            Capsule().stroke(Color.primary.opacity(0.18), lineWidth: 1)
-                        )
-                        .liquidGlassBackground(in: Capsule())
+                        .background(Capsule().fill(.ultraThinMaterial))
                     Spacer()
                 }
                 .padding(.top, 74)
@@ -691,12 +685,7 @@ private struct BinHeaderSection: View {
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
-                    .background(
-                        Capsule().fill(.ultraThinMaterial)
-                    )
-                    .overlay(
-                        Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1)
-                    )
+                    .background(Capsule().fill(.ultraThinMaterial))
                     .buttonStyle(.plain)
                 }
             }
@@ -839,14 +828,7 @@ private struct BinConfirmationOverlay: View {
             }
             .padding(20)
             .frame(maxWidth: 360)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-            )
+            .staticCard(cornerRadius: 18)
         }
     }
 }
@@ -947,15 +929,7 @@ private struct BinSelectionBar: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.15), lineWidth: 1)
-        )
-        .stableBinGlassBackground(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .staticCard(cornerRadius: 18)
     }
 }
 
@@ -990,25 +964,19 @@ private struct BinStatCard: View {
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(AppType.body(11))
-                .foregroundStyle(.primary.opacity(0.55))
+        VStack(alignment: .leading, spacing: 2) {
             Text(value)
-                .font(AppType.title(18))
+                .font(AppType.display(28))
                 .foregroundStyle(.primary)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+            Text(title)
+                .font(AppType.body(11))
+                .foregroundStyle(.secondary)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-        )
-        .stableBinGlassBackground(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .staticCard(cornerRadius: 16)
     }
 }
 
@@ -1115,17 +1083,10 @@ private struct BinEntryCard: View, Equatable {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(colorScheme == .light ? Color.white.opacity(0.74) : Color.white.opacity(0.11))
-        )
+        .staticCard(cornerRadius: 20)
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(statusColor.opacity(0.72), lineWidth: 1.5)
+                .stroke(statusColor.opacity(0.55), lineWidth: 1.5)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
@@ -1434,14 +1395,7 @@ private struct BinDetailView: View {
                     }
                     .padding(20)
                     .frame(maxWidth: 360)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-                    )
+                    .staticCard(cornerRadius: 18)
                 }
                 .transition(.opacity)
             }
@@ -1496,14 +1450,7 @@ private struct BinDetailView: View {
                     }
                     .padding(20)
                     .frame(maxWidth: 360)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-                    )
+                    .staticCard(cornerRadius: 18)
                 }
                 .transition(.opacity)
             }
@@ -1682,18 +1629,6 @@ private func loadHistoryImageForBin(path: String?) -> UIImage? {
 
 private func formatBinEntryDate(_ date: Date) -> String {
     binEntryDateFormatter.string(from: date)
-}
-
-private extension View {
-    // Keep liquid glass in Bin while reducing light-mode flicker from repeated material recomposition.
-    func stableBinGlassBackground<S: InsettableShape>(in shape: S) -> some View {
-        self
-            .liquidGlassBackground(in: shape)
-            .transaction { transaction in
-                transaction.disablesAnimations = true
-            }
-            .compositingGroup()
-    }
 }
 
 #Preview {

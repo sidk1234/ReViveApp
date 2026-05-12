@@ -891,14 +891,7 @@ private struct SignInCelebrationOverlay: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 22)
                 .frame(maxWidth: 286)
-                .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(cardBorderColor, lineWidth: 1)
-                )
+                .staticCard(cornerRadius: 20)
             }
         }
         .onAppear {
@@ -918,10 +911,6 @@ private struct SignInCelebrationOverlay: View {
 
     private var overlayScrimColor: Color {
         colorScheme == .light ? Color.black.opacity(0.18) : Color.black.opacity(0.56)
-    }
-
-    private var cardBorderColor: Color {
-        colorScheme == .light ? Color.white.opacity(0.92) : Color.white.opacity(0.14)
     }
 
     private var progressTrackColor: Color {
@@ -1092,11 +1081,7 @@ private struct EditProfileView: View {
                             .frame(height: 46)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white.opacity(0.06))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .fill(.ultraThinMaterial)
                             )
                     }
 
@@ -1114,12 +1099,9 @@ private struct EditProfileView: View {
                             .frame(height: 46)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white.opacity(auth.canEditEmailPassword ? 0.06 : 0.04))
+                                    .fill(.ultraThinMaterial)
                             )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.white.opacity(auth.canEditEmailPassword ? 0.12 : 0.08), lineWidth: 1)
-                            )
+                            .opacity(auth.canEditEmailPassword ? 1 : 0.55)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
@@ -1133,11 +1115,7 @@ private struct EditProfileView: View {
                             .frame(height: 46)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white.opacity(0.06))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .fill(.ultraThinMaterial)
                             )
                     }
 
@@ -1152,11 +1130,7 @@ private struct EditProfileView: View {
                             .frame(height: 46)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white.opacity(0.06))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .fill(.ultraThinMaterial)
                             )
                     }
 
@@ -1173,11 +1147,7 @@ private struct EditProfileView: View {
                             .frame(height: 46)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white.opacity(0.06))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .fill(.ultraThinMaterial)
                             )
                     }
 
@@ -1192,11 +1162,7 @@ private struct EditProfileView: View {
                             .padding(.vertical, 10)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white.opacity(0.06))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .fill(.ultraThinMaterial)
                             )
                     }
 
@@ -1213,11 +1179,7 @@ private struct EditProfileView: View {
                                 .frame(height: 46)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.white.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                        .fill(.ultraThinMaterial)
                                 )
                         }
 
@@ -1233,11 +1195,7 @@ private struct EditProfileView: View {
                                 .frame(height: 46)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.white.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                        .fill(.ultraThinMaterial)
                                 )
                         }
 
@@ -1253,11 +1211,7 @@ private struct EditProfileView: View {
                                 .frame(height: 46)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.white.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                        .fill(.ultraThinMaterial)
                                 )
                         }
                     } else if auth.canAddPassword {
@@ -1274,11 +1228,7 @@ private struct EditProfileView: View {
                                 .frame(height: 46)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.white.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                        .fill(.ultraThinMaterial)
                                 )
 
                             SecureField("Confirm password", text: $confirmNewPassword)
@@ -1289,11 +1239,7 @@ private struct EditProfileView: View {
                                 .frame(height: 46)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.white.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                        .fill(.ultraThinMaterial)
                                 )
                         }
                     } else {

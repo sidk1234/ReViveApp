@@ -460,84 +460,32 @@ struct HomeFeedView: View {
     }
 
     private var dailyTipCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: "leaf.fill")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(dailyTipIconColor)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(AppTheme.mint)
+                    .frame(width: 30, height: 30)
+                    .background(AppTheme.mint.opacity(0.15), in: Circle())
 
-                Text("Today's Recycling Tip")
-                    .font(AppType.title(18))
-                    .foregroundStyle(dailyTipTitleColor)
+                Text("Today's Tip")
+                    .font(AppType.title(16))
+                    .foregroundStyle(.primary)
             }
 
             Text(todayTip)
                 .font(AppType.body(15))
-                .foregroundStyle(dailyTipBodyColor)
+                .foregroundStyle(.primary.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
+                .lineSpacing(2)
 
             Text(encouragementText)
                 .font(AppType.body(12))
-                .foregroundStyle(dailyTipSecondaryColor)
+                .foregroundStyle(.secondary)
         }
-        .padding(18)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(dailyTipBackgroundGradient)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(AppTheme.mint.opacity(0.4), lineWidth: 1)
-        )
-        .shadow(color: AppTheme.mint.opacity(0.18), radius: 14, x: 0, y: 8)
-    }
-
-    private var dailyTipBackgroundGradient: LinearGradient {
-        if colorScheme == .light {
-            return LinearGradient(
-                colors: [
-                    Color(red: 0.84, green: 0.95, blue: 0.91),
-                    Color(red: 0.72, green: 0.87, blue: 0.82)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-
-        return LinearGradient(
-            colors: [AppTheme.deepTeal.opacity(0.85), AppTheme.night.opacity(0.75)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private var dailyTipIconColor: Color {
-        if colorScheme == .light {
-            return Color(red: 0.07, green: 0.42, blue: 0.34)
-        }
-        return AppTheme.mint
-    }
-
-    private var dailyTipTitleColor: Color {
-        if colorScheme == .light {
-            return Color(red: 0.07, green: 0.11, blue: 0.14)
-        }
-        return .primary
-    }
-
-    private var dailyTipBodyColor: Color {
-        if colorScheme == .light {
-            return Color(red: 0.10, green: 0.16, blue: 0.20)
-        }
-        return .primary.opacity(0.92)
-    }
-
-    private var dailyTipSecondaryColor: Color {
-        if colorScheme == .light {
-            return Color(red: 0.06, green: 0.32, blue: 0.27)
-        }
-        return AppTheme.mint.opacity(0.92)
+        .staticCard(cornerRadius: 22)
     }
 
     private var statsRow: some View {
@@ -559,64 +507,51 @@ struct HomeFeedView: View {
         Button {
             showStreakMenu = true
         } label: {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Current Streak")
-                            .font(AppType.body(12))
-                            .foregroundStyle(.primary.opacity(0.72))
+            HStack(alignment: .center, spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Current Streak")
+                        .font(AppType.body(13))
+                        .foregroundStyle(.secondary)
 
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text("\(streakStats.currentDays)")
-                                .font(AppType.display(42))
-                                .foregroundStyle(.primary)
-                                .monospacedDigit()
-                            Text("days")
-                                .font(AppType.title(22))
-                                .foregroundStyle(.primary.opacity(0.9))
-                        }
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text("\(streakStats.currentDays)")
+                            .font(AppType.display(48))
+                            .foregroundStyle(.primary)
+                            .monospacedDigit()
+                        Text("days")
+                            .font(AppType.title(20))
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 4)
                     }
 
-                    Spacer()
+                    Text(streakHeadlineText)
+                        .font(AppType.body(14))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
 
-                    StreakFlameBadge(currentDays: streakStats.currentDays, size: 74)
-                }
-
-                Text(streakHeadlineText)
-                    .font(AppType.title(16))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-
-                HStack(spacing: 8) {
                     if let nextDays = streakStats.nextMilestoneDays,
                        let nextXP = streakStats.nextMilestoneXP {
-                        Text("Next: \(nextDays)d streak (+\(nextXP) XP)")
+                        Text("Next milestone: \(nextDays)d (+\(nextXP) XP)")
                             .font(AppType.body(12))
-                            .foregroundStyle(AppTheme.mint.opacity(0.95))
+                            .foregroundStyle(AppTheme.mint)
                             .lineLimit(1)
                             .minimumScaleFactor(0.85)
-                    } else {
-                        Text("All streak milestones unlocked")
-                            .font(AppType.body(12))
-                            .foregroundStyle(AppTheme.mint.opacity(0.95))
+                            .padding(.top, 2)
                     }
-                    Spacer()
+                }
+
+                Spacer(minLength: 16)
+
+                VStack(alignment: .trailing, spacing: 8) {
+                    StreakFlameBadge(currentDays: streakStats.currentDays, size: 64)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.primary.opacity(0.55))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .padding(18)
+            .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(streakBackgroundGradient)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(AppTheme.mint.opacity(colorScheme == .light ? 0.38 : 0.30), lineWidth: 1)
-            )
-            .shadow(color: AppTheme.mint.opacity(colorScheme == .light ? 0.15 : 0.24), radius: 14, x: 0, y: 8)
+            .staticCard(cornerRadius: 22)
         }
         .buttonStyle(.plain)
     }
@@ -629,27 +564,6 @@ struct HomeFeedView: View {
             return "Great work. Today's recycle is locked in."
         }
         return "Recycle today to keep your streak alive."
-    }
-
-    private var streakBackgroundGradient: LinearGradient {
-        if colorScheme == .light {
-            return LinearGradient(
-                colors: [
-                    Color(red: 0.95, green: 0.99, blue: 0.94),
-                    Color(red: 0.84, green: 0.95, blue: 0.86)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-        return LinearGradient(
-            colors: [
-                Color(red: 0.09, green: 0.25, blue: 0.19),
-                Color(red: 0.05, green: 0.12, blue: 0.10)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
     }
 
     private var recycledStreakDays: Set<Date> {
@@ -665,52 +579,19 @@ struct HomeFeedView: View {
         Button {
             openCapture()
         } label: {
-            ZStack {
-                Circle()
-                    .stroke(
-                        Color(red: 0.43, green: 0.96, blue: 0.77)
-                            .opacity(colorScheme == .light ? 0.92 : 1),
-                        lineWidth: 3
-                    )
-
-                Circle()
-                    .stroke(
-                        Color(red: 0.43, green: 0.96, blue: 0.77)
-                            .opacity(colorScheme == .light ? 0.54 : 0.68),
-                        lineWidth: 7
-                    )
-                    .padding(8)
-
-                Circle()
-                    .fill(
-                        colorScheme == .light
-                        ? Color(red: 0.66, green: 0.97, blue: 0.86)
-                        : Color(red: 0.50, green: 0.95, blue: 0.79)
-                    )
-                    .padding(16)
-
-                VStack(spacing: 8) {
-                    Image(systemName: "camera.fill")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundStyle(Color.black.opacity(0.82))
-
-                    Text("Scan Now")
-                        .font(AppType.title(24))
-                        .foregroundStyle(Color.black.opacity(0.9))
-                }
+            HStack(spacing: 12) {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 20, weight: .bold))
+                Text("Scan Now")
+                    .font(AppType.title(20))
             }
-            .frame(width: 210, height: 210)
-            .shadow(
-                color: Color(red: 0.43, green: 0.96, blue: 0.77)
-                    .opacity(colorScheme == .light ? 0.24 : 0.44),
-                radius: 24,
-                x: 0,
-                y: 10
-            )
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity)
+            .frame(height: 66)
+            .background(AppTheme.mint, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(color: AppTheme.mint.opacity(colorScheme == .light ? 0.28 : 0.40), radius: 20, x: 0, y: 8)
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 2)
     }
 
     @ViewBuilder
@@ -1404,24 +1285,24 @@ private final class ChallengeConfettiEmitterView: UIView {
     }
 }
 
-private let homeStatsCardHeight: CGFloat = 64
-
 private struct HomeStatCard: View {
     let title: String
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title.uppercased())
-                .font(AppType.body(11))
-                .foregroundStyle(.primary.opacity(0.58))
+        VStack(alignment: .leading, spacing: 2) {
             Text(value)
-                .font(AppType.title(16))
+                .font(AppType.display(34))
                 .foregroundStyle(.primary)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+            Text(title)
+                .font(AppType.body(11))
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: homeStatsCardHeight, maxHeight: homeStatsCardHeight, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .staticCard(cornerRadius: 16)
     }
 }
@@ -1431,22 +1312,21 @@ private struct HomeProgressCard: View {
     let carbonSavedKg: Double
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text("PROGRESS")
-                .font(AppType.body(10))
-                .foregroundStyle(.primary.opacity(0.58))
+        VStack(alignment: .leading, spacing: 2) {
             Text("Lvl \(level)")
-                .font(AppType.title(15))
+                .font(AppType.display(34))
                 .foregroundStyle(.primary)
-            Text("\(formatCarbon(carbonSavedKg)) CO2e")
-                .font(AppType.body(10))
-                .foregroundStyle(AppTheme.mint.opacity(0.9))
+                .minimumScaleFactor(0.7)
                 .lineLimit(1)
-                .minimumScaleFactor(0.9)
+            Text(formatCarbon(carbonSavedKg) + " CO2e")
+                .font(AppType.body(11))
+                .foregroundStyle(AppTheme.mint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: homeStatsCardHeight, maxHeight: homeStatsCardHeight, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .staticCard(cornerRadius: 16)
     }
 

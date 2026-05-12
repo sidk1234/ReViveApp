@@ -151,15 +151,11 @@ struct LoginScreen: View {
                         .font(AppType.title(15))
                     Spacer()
                 }
-                .foregroundStyle(.primary)
+                .foregroundStyle(.black)
                 .padding(.vertical, 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                .liquidGlassButton(
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                    tint: AppTheme.mint
                 )
             }
             .buttonStyle(.plain)
@@ -252,15 +248,11 @@ struct LoginScreen: View {
                         .font(AppType.title(15))
                     Spacer()
                 }
-                .foregroundStyle(.primary)
+                .foregroundStyle(.black)
                 .padding(.vertical, 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                .liquidGlassButton(
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                    tint: AppTheme.mint
                 )
             }
             .buttonStyle(.plain)
@@ -393,14 +385,7 @@ private struct AuthLeftPane: View {
                 .tracking(2)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Color.white.opacity(0.08))
-                )
-                .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                )
+                .background(Capsule().fill(.ultraThinMaterial))
 
             Text(isCreate ? "Create your account" : "Welcome back")
                 .font(AppType.display(34))
