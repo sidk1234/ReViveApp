@@ -34,7 +34,8 @@ final class BinReminderNotificationManager {
             let content = UNMutableNotificationContent()
             content.title = "ReVive Reminder"
             let itemWord = markedCount == 1 ? "item" : "items"
-            content.body = "You have \(markedCount) \(itemWord) in your bin. Have you recycled them yet?"
+            let pronoun = markedCount == 1 ? "it" : "them"
+            content.body = "You have \(markedCount) \(itemWord) marked for recycle. Have you recycled \(pronoun) yet?"
             content.sound = .default
             content.categoryIdentifier = Self.reminderCategoryID
 
@@ -54,4 +55,3 @@ final class BinReminderNotificationManager {
 extension Notification.Name {
     static let reviveOpenBin = Notification.Name("revive.openBin")
 }
-
