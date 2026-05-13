@@ -638,7 +638,7 @@ struct HomeFeedView: View {
     }
 
     private func insightsSection(cardWidth: CGFloat) -> some View {
-        let insightCardHeight: CGFloat = 144
+        let insightCardHeight: CGFloat = 128
 
         return VStack(alignment: .leading, spacing: 10) {
             Text("Insights")
@@ -1354,8 +1354,8 @@ private struct HomeFeedCard: View {
     var isCompact: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isCompact ? 8 : 10) {
-            HStack(spacing: isCompact ? 8 : 10) {
+        VStack(alignment: .leading, spacing: isCompact ? 6 : 10) {
+            HStack(spacing: isCompact ? 7 : 10) {
                 Image(systemName: data.symbol)
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(data.tint)
@@ -1390,11 +1390,10 @@ private struct HomeFeedCard: View {
             .font(AppType.body(14))
             .foregroundStyle(.primary.opacity(0.86))
             .lineSpacing(2)
-            .padding(.vertical, 1)
 
             Spacer(minLength: 0)
         }
-        .padding(isCompact ? 14 : 16)
+        .padding(isCompact ? 12 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .staticCard(cornerRadius: isCompact ? 20 : 22)
     }
